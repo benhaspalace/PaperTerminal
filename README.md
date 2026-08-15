@@ -16,7 +16,7 @@ extension. It turns the 600x800 e-ink screen into a classic flight board:
  \v 13:51 WK 205  PMI   EDELWEISS        A343 16
  /^ 13:54 BA 711  LHR   BRITISH AIRWAYS  A320 28
  ------------------------------------------------
- DEMO DATA                              UPD 13:55
+ LIVE ZRH                               UPD 13:55
 ```
 
 Each row shows the **time, airline, flight number, origin/destination
@@ -35,18 +35,16 @@ curl/openssl/wget are 2010-era and deliberately never used for TLS.
 - Origin airport shown for arrivals, destination for departures
 - Default airport: pick from a preset menu, or set **any** IATA/ICAO code by
   editing a config file over USB
-- Demo mode that works fully offline (sample flights with times generated
-  around the current clock), enabled out of the box
-- Live mode that fetches real flights from a tiny feed proxy
-  (`server/feed_proxy.py`) with real runway data via FlightAware
+- Live flight data from a tiny feed proxy (`server/feed_proxy.py`) with
+  real runway data via FlightAware
 - Bundled HTTPS stack: static curl 8.21 with OpenSSL 3.5 LTS inside and an
   up-to-date Mozilla CA root bundle, built for the K3's ARMv6 CPU and 2.6
   kernel — `https://` feed URLs work, verified against real certificates,
   so the proxy can live anywhere on the internet, not just your LAN
 - On-device network self-test screen (checks the TLS stack, then the feed)
-- Optional auto-refresh in live mode
-- Graceful fallback: if the live feed is unreachable, the board still draws
-  with demo data and says `FEED DOWN - DEMO`
+- Optional auto-refresh
+- When the feed is unreachable, the board shows a diagnostic screen that
+  points at the failing step instead of stale or fake data
 
 ## Requirements
 
@@ -55,12 +53,11 @@ curl/openssl/wget are 2010-era and deliberately never used for TLS.
 - **KUAL** installed. On the K3 that is the *KUAL Kindlet* (`KUAL-*.azw2`
   placed in the `documents` folder), which also requires the kindlet
   jailbreak key from the same MobileRead resources
-- For live mode only: Wi-Fi, plus any machine running Python 3 for the
-  feed proxy — on your LAN or anywhere on the internet behind HTTPS
+- Wi-Fi, plus any machine running Python 3 for the feed proxy — on your
+  LAN or anywhere on the internet behind HTTPS
 
 > **Note on 3G:** the K3's free 3G (Whispernet) only reaches Amazon
-> services — it cannot reach your LAN or arbitrary HTTP servers. Live mode
-> therefore needs Wi-Fi. Demo mode works anywhere with no network at all.
+> services — it cannot reach your feed. PaperTerminal needs Wi-Fi.
 
 ## Install
 
@@ -72,11 +69,15 @@ curl/openssl/wget are 2010-era and deliberately never used for TLS.
    /mnt/us/extensions/paperterminal/config.xml
    /mnt/us/extensions/paperterminal/menu.json
    /mnt/us/extensions/paperterminal/bin/...
-   /mnt/us/extensions/paperterminal/data/...
+   /mnt/us/extensions/paperterminal/lib/...
    ```
 
-3. Eject, open KUAL from your books list, and you'll see
-   **PaperTerminal Flight Board**.
+3. Start the feed proxy somewhere (see [Flight data](#flight-data)) and put
+   its address in `paperterminal.conf` as `FEED_URL` — the file is created
+   with defaults on first run, or create it yourself over USB.
+4. Eject, open KUAL from your books list, and you'll see
+   **PaperTerminal Flight Board**. Run **Network self-test (HTTPS)** first
+   to confirm the Kindle can reach your feed.
 
 ## Usage
 
@@ -89,8 +90,12 @@ From the KUAL menu:
   expected).
 - **Set default airport** — pick from common airports (ZRH, GVA, LHR, LGW,
   AMS, CDG, FRA, MUC, VIE, BUD, JFK).
-- **Switch demo / live mode** — toggles the data source.
+- **Network self-test (HTTPS)** — checks the bundled TLS stack, then an
+  HTTPS fetch from the internet, then your configured feed.
 - **Help + current settings** — shows the active configuration on screen.
+
+If the feed can't be reached, the board draws a diagnostic screen naming
+the URL it tried and the usual causes, instead of showing stale data.
 
 ### Configuration file
 
@@ -99,10 +104,9 @@ which you can edit over USB with any text editor:
 
 ```
 AIRPORT=ZRH      # any IATA (ZRH) or, for AeroAPI, ICAO (LSZH) code
-MODE=demo        # demo | live
-FEED_URL=http://192.168.0.10:8091/feed
+FEED_URL=http://192.168.0.10:8091/feed   # or https://... (bundled curl)
 ROWS=12          # flights per board, 1..14
-REFRESH=0        # live mode: redraw every N seconds (0 = draw once)
+REFRESH=0        # redraw every N seconds (0 = draw once)
 ```
 
 This is also how you set an airport that isn't in the preset menu.
@@ -139,9 +143,9 @@ Use the KUAL menu's **Network self-test (HTTPS)** to verify the stack on
 the device: it checks `lib/curl` runs, fetches an HTTPS page with
 certificate verification, then tests your configured feed.
 
-## Live data
+## Flight data
 
-Live mode uses a minimal text feed served by `server/feed_proxy.py`. The
+The board reads a minimal text feed served by `server/feed_proxy.py`. The
 proxy needs only the Python 3 standard library:
 
 ```sh
@@ -156,7 +160,6 @@ python3 server/feed_proxy.py --backend aviationstack --key YOUR_KEY
 Then set on the Kindle:
 
 ```
-MODE=live
 FEED_URL=http://<proxy-machine-LAN-IP>:8091/feed
 ```
 
@@ -198,12 +201,10 @@ extensions/paperterminal/   the KUAL extension (copy this to the Kindle)
   config.xml                KUAL extension descriptor
   menu.json                 KUAL menu entries
   bin/common.sh             shared helpers (config, eips drawing, fetching)
-  bin/board.sh              fetches data and draws the board
+  bin/board.sh              fetches the feed and draws the board
   bin/set_airport.sh        writes the default airport
-  bin/set_mode.sh           demo/live toggle
   bin/nettest.sh            on-device network / HTTPS self-test
   bin/help.sh               on-device help screen
-  data/demo_*.txt           offline sample flights
   lib/curl                  static modern curl + OpenSSL for the K3
   lib/openssl               static OpenSSL CLI for debugging
   lib/cacert.pem            Mozilla CA root bundle
@@ -217,16 +218,16 @@ server/feed_proxy.py        feed proxy for live data (LAN or internet)
 
 - **Board flashes and disappears** — you pressed a key; the Kindle UI
   repaints over the board. Just relaunch it from KUAL.
-- **`FEED DOWN - DEMO` in the footer** — the Kindle couldn't fetch
-  `FEED_URL`. Run the **Network self-test (HTTPS)** from the KUAL menu:
-  it tells you whether the TLS stack, the internet connection, or the feed
-  itself is the problem. The last error is written to
+- **`FEED UNREACHABLE OR INVALID` screen** — the Kindle couldn't fetch or
+  parse `FEED_URL`. Run the **Network self-test (HTTPS)** from the KUAL
+  menu: it tells you whether the TLS stack, the internet connection, or
+  the feed itself is the problem. The last error is written to
   `extensions/paperterminal/paperterminal.log`.
 - **`https://` feed fails but http works** — make sure the `lib/` folder
   was copied to the Kindle along with the rest of the extension. Some
   firmwares mount `/mnt/us` noexec; the extension handles that
   automatically by running a copy of curl from `/var/tmp`.
-- **Live mode shows `-` for runway** — expected for flights that haven't
+- **`-` shown for runway** — expected for flights that haven't
   landed/departed yet, and for the aviationstack backend always.
 - **Nothing appears in KUAL** — make sure the folder is
   `extensions/paperterminal` (lowercase) directly under the Kindle's

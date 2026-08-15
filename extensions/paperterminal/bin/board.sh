@@ -1,5 +1,5 @@
 #!/bin/sh
-# PaperTerminal - draw the arrival/departure board.
+# PaperTerminal - draw the arrival/departure board from the live feed.
 # usage: board.sh arr|dep|all
 
 . "$(dirname "$0")/common.sh"
@@ -15,67 +15,43 @@ case "$DIR" in
     all) TITLE="ALL FLIGHTS"; PICT='\v/^'; DCOL="FR/TO" ;;
 esac
 
-# ------------------------------------------------------------------ time ---
-# Demo data stores times as offsets in minutes from "now" (+12 / -4) so the
-# board always looks alive. Live feed lines carry ready-made HH:MM.
-
-now_minutes() {
-    h="$(date +%H)"; m="$(date +%M)"
-    h="${h#0}"; m="${m#0}"
-    echo $(( h * 60 + m ))
-}
-
-fmt_time() {
-    case "$1" in
-        [+-]*)
-            n="${1#?}"
-            case "$n" in ''|*[!0-9]*) echo "--:--"; return;; esac
-            case "$1" in
-                -*) t=$(( NOWM - n ));;
-                *)  t=$(( NOWM + n ));;
-            esac
-            t=$(( (t + 2880) % 1440 ))
-            printf '%02d:%02d\n' $(( t / 60 )) $(( t % 60 ))
-            ;;
-        '') echo "--:--" ;;
-        *)  echo "$1" ;;
-    esac
-}
-
 # ------------------------------------------------------------------ feed ---
 # Feed line format (v2):  DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT
 # DIR is A (arrival) or D (departure); AIRPORT is the origin for arrivals
 # and the destination for departures. Lines starting with # are comments.
-# In demo mode (or when the live feed is unreachable) the bundled demo
-# files are used instead.
 
 get_feed() {
-    SOURCE="DEMO DATA"
-    FEED_FILE="$PT_DATA/demo_${DIR}.txt"
-    [ "$MODE" = "live" ] || return 0
-
+    FEED_OK=0
     url="$FEED_URL?airport=$AIRPORT&dir=$DIR&limit=$ROWS"
     rm -f "$PT_TMP"
-
-    pt_fetch "$url" "$PT_TMP"
-
-    if [ -s "$PT_TMP" ] && grep -q '^[AD]|.*|.*|.*|.*|.*|' "$PT_TMP"; then
-        SOURCE="LIVE $AIRPORT"
-        FEED_FILE="$PT_TMP"
-    else
-        SOURCE="FEED DOWN - DEMO"
+    if ! pt_fetch "$url" "$PT_TMP"; then
         log "feed fetch failed: $url"
+        return 1
+    fi
+    if [ -s "$PT_TMP" ] && grep -q '^[AD]|.*|.*|.*|.*|.*|' "$PT_TMP"; then
+        FEED_OK=1
+    else
+        log "feed returned no valid flight lines: $url"
     fi
 }
 
 # ------------------------------------------------------------------ draw ---
 
-draw_board() {
-    NOWM=$(now_minutes)
+draw_header() {
     cls
     say 1 1 "PAPERTERMINAL"
     say_r 1 "$AIRPORT $PICT $TITLE"
     say 1 2 "$HRULE"
+}
+
+draw_footer() { # draw_footer <left-text>
+    say 1 36 "$LRULE"
+    say 1 37 "$1"
+    say_r 37 "UPD $(date +%H:%M)"
+}
+
+draw_board() {
+    draw_header
     say 1 3 "$(printf '%-2s %-5s %-7s %-5s %-16s %-4s %-3s' '' 'TIME' 'FLIGHT' "$DCOL" 'AIRLINE' 'TYPE' 'RWY')"
     say 1 4 "$LRULE"
 
@@ -94,32 +70,47 @@ draw_board() {
         [ -n "$AP" ] || AP="-"
         [ -n "$RW" ] || RW="-"
         [ -n "$TY" ] || TY="-"
+        [ -n "$T"  ] || T="--:--"
         line="$(printf '%-2s %-5.5s %-7.7s %-5.5s %-16.16s %-4.4s %-3.3s' \
-            "$RP" "$(fmt_time "$T")" "$FL" "$AP" "$AL" "$TY" "$RW")"
+            "$RP" "$T" "$FL" "$AP" "$AL" "$TY" "$RW")"
         say 1 $row "$line"
         row=$(( row + 2 ))
         count=$(( count + 1 ))
-    done < "$FEED_FILE"
+    done < "$PT_TMP"
 
-    [ $count -eq 0 ] && say 1 10 "NO FLIGHTS IN FEED"
+    [ $count -eq 0 ] && say 1 10 "NO FLIGHTS REPORTED FOR $AIRPORT RIGHT NOW"
 
-    say 1 36 "$LRULE"
-    say 1 37 "$SOURCE"
-    say_r 37 "UPD $(date +%H:%M)"
+    draw_footer "LIVE $AIRPORT"
+}
+
+draw_error() {
+    draw_header
+    say 1 6  "  FEED UNREACHABLE OR INVALID"
+    say 1 8  "  URL: $(printf '%.41s' "$FEED_URL")"
+    say 1 10 "  CHECK:"
+    say 1 11 "  - WI-FI IS CONNECTED (3G ONLY REACHES"
+    say 1 12 "    AMAZON, IT CANNOT REACH YOUR FEED)"
+    say 1 13 "  - YOUR FEED PROXY IS RUNNING"
+    say 1 14 "    (server/feed_proxy.py IN THE REPO)"
+    say 1 15 "  - FEED_URL IN paperterminal.conf"
+    say 1 17 "  RUN KUAL > NETWORK SELF-TEST (HTTPS)"
+    say 1 18 "  TO PINPOINT THE FAILING STEP."
+    say 1 20 "  DETAILS: paperterminal.log"
+    draw_footer "FEED DOWN"
 }
 
 # ------------------------------------------------------------------ main ---
 
 get_feed
-draw_board
+if [ "$FEED_OK" = 1 ]; then draw_board; else draw_error; fi
 
-# Optional live auto-refresh, bounded so KUAL never hangs forever.
-if [ "$REFRESH" -gt 0 ] && [ "$MODE" = "live" ]; then
+# Optional auto-refresh, bounded so KUAL never hangs forever.
+if [ "$REFRESH" -gt 0 ]; then
     i=0
     while [ $i -lt 30 ]; do
         sleep "$REFRESH"
         get_feed
-        draw_board
+        if [ "$FEED_OK" = 1 ]; then draw_board; else draw_error; fi
         i=$(( i + 1 ))
     done
 fi

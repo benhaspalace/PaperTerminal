@@ -38,23 +38,19 @@ else
     say 1 10 "  SKIPPED - NO RUNNABLE lib/curl"
 fi
 
-say 1 13 "TEST 2: CONFIGURED FEED ($MODE MODE)"
-if [ "$MODE" = "live" ]; then
-    rm -f "$PT_TMP"
-    if pt_fetch "$FEED_URL?airport=$AIRPORT&dir=arr&limit=3" "$PT_TMP" \
-       && grep -q '^[AD]|' "$PT_TMP" 2>/dev/null; then
-        NFL="$(grep -c '^[AD]|' "$PT_TMP")"
-        say 1 14 "  FEED OK - $NFL FLIGHTS FOR $AIRPORT"
-        say 1 15 "  $(grep '^[AD]|' "$PT_TMP" | head -n 1 | cut -c1-44)"
-    else
-        say 1 14 "  FEED FAILED: $(printf '%.32s' "$FEED_URL")"
-        say 1 15 "  BOARDS WILL FALL BACK TO DEMO DATA"
-    fi
+say 1 13 "TEST 2: CONFIGURED FEED"
+rm -f "$PT_TMP"
+if pt_fetch "$FEED_URL?airport=$AIRPORT&dir=arr&limit=3" "$PT_TMP" \
+   && grep -q '^[AD]|' "$PT_TMP" 2>/dev/null; then
+    NFL="$(grep -c '^[AD]|' "$PT_TMP")"
+    say 1 14 "  FEED OK - $NFL FLIGHTS FOR $AIRPORT"
+    say 1 15 "  $(grep '^[AD]|' "$PT_TMP" | head -n 1 | cut -c1-44)"
 else
-    say 1 14 "  DEMO MODE - FEED NOT CONTACTED"
-    say 1 15 "  SWITCH TO LIVE MODE TO TEST THE FEED"
+    say 1 14 "  FEED FAILED: $(printf '%.32s' "$FEED_URL")"
+    say 1 15 "  CHECK FEED_URL IN paperterminal.conf AND"
+    say 1 16 "  THAT server/feed_proxy.py IS RUNNING"
 fi
 
-say 1 17 "$LRULE"
-say 1 18 "PRESS ANY KEY TO GET THE MENU BACK"
+say 1 18 "$LRULE"
+say 1 19 "PRESS ANY KEY TO GET THE MENU BACK"
 exit 0

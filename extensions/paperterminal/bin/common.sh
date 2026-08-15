@@ -8,7 +8,6 @@ PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 PT_BIN="$(cd "$(dirname "$0")" && pwd)"
 PT_HOME="$(dirname "$PT_BIN")"
 PT_CONF="$PT_HOME/paperterminal.conf"
-PT_DATA="$PT_HOME/data"
 PT_LIB="$PT_HOME/lib"
 PT_LOG="$PT_HOME/paperterminal.log"
 PT_TMP="/tmp/paperterminal.feed"
@@ -20,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="1.2.0"
+PT_VERSION="2.0.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -63,7 +62,6 @@ cfg() { sed -n "s/^$1=//p" "$PT_CONF" 2>/dev/null | head -n 1 | tr -d '\r'; }
 load_conf() {
     [ -f "$PT_CONF" ] || save_conf_defaults
     AIRPORT="$(cfg AIRPORT)";   [ -n "$AIRPORT" ]  || AIRPORT="ZRH"
-    MODE="$(cfg MODE)";         [ "$MODE" = "live" ] || MODE="demo"
     FEED_URL="$(cfg FEED_URL)"; [ -n "$FEED_URL" ] || FEED_URL="http://192.168.0.10:8091/feed"
     ROWS="$(cfg ROWS)"
     case "$ROWS" in ''|*[!0-9]*) ROWS=12;; esac
@@ -77,14 +75,13 @@ save_conf() {
     cat > "$PT_CONF" <<EOF
 # PaperTerminal settings - safe to edit over USB.
 # AIRPORT : default airport code (IATA like ZRH; ICAO also fine for AeroAPI)
-# MODE    : demo | live
-# FEED_URL: feed endpoint (see server/feed_proxy.py in the repo).
-#           https:// works via the bundled lib/curl; plain http:// works
-#           even without it (busybox wget fallback).
+# FEED_URL: your feed endpoint (see server/feed_proxy.py in the repo).
+#           https:// works via the bundled lib/curl and is verified with
+#           lib/cacert.pem; plain http:// works even without lib/
+#           (busybox wget fallback).
 # ROWS    : flights per board, 1..14
-# REFRESH : live mode auto-redraw interval in seconds, 0 = draw once
+# REFRESH : auto-redraw interval in seconds, 0 = draw once
 AIRPORT=$AIRPORT
-MODE=$MODE
 FEED_URL=$FEED_URL
 ROWS=$ROWS
 REFRESH=$REFRESH
@@ -93,7 +90,6 @@ EOF
 
 save_conf_defaults() {
     AIRPORT="ZRH"
-    MODE="demo"
     FEED_URL="http://192.168.0.10:8091/feed"
     ROWS=12
     REFRESH=0
