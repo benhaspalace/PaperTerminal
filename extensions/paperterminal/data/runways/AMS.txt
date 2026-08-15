@@ -1,0 +1,21 @@
+                                          N ^
+
+  18R     18C
+   |       |
+   |       |          09 =========== 27
+   |       |
+   |       |            18L    04
+   |       |             |      \
+   |       |             |       \
+   |       |             |        22
+   36L     36C           |
+                    24   36R
+                     \
+                      \
+                       \
+                        06
+
+ AMSTERDAM SCHIPHOL - 6 RUNWAYS
+   18R/36L POLDERBAAN        18C/36C ZWANENBURG
+   18L/36R AALSMEERBAAN      06/24   KAAGBAAN
+   09/27   BUITENVELDERTBAAN 04/22   OOSTBAAN

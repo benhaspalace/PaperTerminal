@@ -1,0 +1,33 @@
+{
+    "items": [
+        {
+            "name": "PaperTerminal Flight Board",
+            "priority": 1,
+            "items": [
+                { "name": "Arrivals board",   "action": "bin/board.sh", "params": "arr" },
+                { "name": "Departures board", "action": "bin/board.sh", "params": "dep" },
+                { "name": "Combined board (arr + dep)", "action": "bin/board.sh", "params": "all" },
+                { "name": "Live traffic map",  "action": "bin/radar.sh" },
+                { "name": "Runway diagram",    "action": "bin/runways.sh" },
+                {
+                    "name": "Set default airport",
+                    "items": [
+                        { "name": "ZRH - Zurich",          "action": "bin/set_airport.sh", "params": "ZRH" },
+                        { "name": "GVA - Geneva",          "action": "bin/set_airport.sh", "params": "GVA" },
+                        { "name": "LHR - London Heathrow", "action": "bin/set_airport.sh", "params": "LHR" },
+                        { "name": "LGW - London Gatwick",  "action": "bin/set_airport.sh", "params": "LGW" },
+                        { "name": "AMS - Amsterdam",       "action": "bin/set_airport.sh", "params": "AMS" },
+                        { "name": "CDG - Paris CDG",       "action": "bin/set_airport.sh", "params": "CDG" },
+                        { "name": "FRA - Frankfurt",       "action": "bin/set_airport.sh", "params": "FRA" },
+                        { "name": "MUC - Munich",          "action": "bin/set_airport.sh", "params": "MUC" },
+                        { "name": "VIE - Vienna",          "action": "bin/set_airport.sh", "params": "VIE" },
+                        { "name": "BUD - Budapest",        "action": "bin/set_airport.sh", "params": "BUD" },
+                        { "name": "JFK - New York JFK",    "action": "bin/set_airport.sh", "params": "JFK" }
+                    ]
+                },
+                { "name": "Network self-test (HTTPS)", "action": "bin/nettest.sh" },
+                { "name": "Help + current settings",  "action": "bin/help.sh" }
+            ]
+        }
+    ]
+}
