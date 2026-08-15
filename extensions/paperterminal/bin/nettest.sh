@@ -1,8 +1,8 @@
 #!/bin/sh
-# PaperTerminal - on-device network / HTTPS self-test.
-# Proves the bundled TLS stack works before you blame the feed.
+# PaperTerminal - on-device network / HTTPS / data-source self-test.
 
 . "$(dirname "$0")/common.sh"
+. "$(dirname "$0")/sources.sh"
 
 load_conf
 cls
@@ -20,7 +20,7 @@ if [ -n "$CURLBIN" ]; then
     say 1 7 "  CA BUNDLE: ${NCERT:-0} ROOT CERTS (cacert.pem)"
 else
     say 1 5 "  lib/curl: MISSING OR NOT RUNNABLE"
-    say 1 6 "  FALLBACK: BUSYBOX WGET (PLAIN HTTP ONLY)"
+    say 1 6 "  ONLY aviationstack (PLAIN http) CAN WORK"
 fi
 
 say 1 9 "TEST 2: HTTPS TO THE INTERNET"
@@ -38,33 +38,48 @@ else
     say 1 10 "  SKIPPED - NO RUNNABLE lib/curl"
 fi
 
-say 1 13 "TEST 3: CONFIGURED FEEDS (EACH IN TURN)"
+say 1 13 "TEST 3: FLIGHT DATA SOURCES (EACH IN TURN)"
 row=14
-idx=0
 NOK=0
-for u in "$FEED_URL" "$FEED_URL2" "$FEED_URL3"; do
-    idx=$(( idx + 1 ))
-    [ -n "$u" ] || continue
+i=0
+while [ $i -lt 3 ]; do
+    i=$(( i + 1 ))
+    eval "spec=\$SOURCE$i"
+    [ -n "$spec" ] || continue
     rm -f "$PT_TMP"
-    if pt_fetch "$u?airport=$AIRPORT&dir=arr&limit=3" "$PT_TMP" \
-       && grep -q '^[AD]|' "$PT_TMP" 2>/dev/null; then
+    if src_try $i arr ahead 3 "$PT_TMP"; then
         NFL="$(grep -c '^[AD]|' "$PT_TMP")"
-        say 1 $row "  FEED $idx OK, $NFL FLIGHTS: $(printf '%.24s' "$u")"
+        say 1 $row "  SOURCE $i ($PT_SRC_TYPE): OK, $NFL FLIGHTS"
         NOK=$(( NOK + 1 ))
     else
-        say 1 $row "  FEED $idx FAILED: $(printf '%.28s' "$u")"
+        say 1 $row "  SOURCE $i (${spec%%,*}): FAILED"
     fi
     row=$(( row + 1 ))
 done
 if [ "$NOK" -eq 0 ]; then
-    say 1 $row "  NO WORKING FEED - CHECK FEED_URL IN"
+    say 1 $row "  NO WORKING SOURCE - PUT YOUR API KEY IN"
     row=$(( row + 1 ))
-    say 1 $row "  paperterminal.conf AND YOUR FEED PROXY"
+    say 1 $row "  SOURCE1= IN paperterminal.conf"
     row=$(( row + 1 ))
 fi
-
 row=$(( row + 1 ))
+
+say 1 $row "TEST 4: ADS-B POSITIONS (TRAFFIC MAP)"
+row=$(( row + 1 ))
+if src_positions "$PT_TMP.pos"; then
+    NAC="$(grep -c '|' "$PT_TMP.pos" 2>/dev/null)"
+    say 1 $row "  OK - $NAC AIRCRAFT SEEN NEAR $AIRPORT"
+else
+    say 1 $row "  FAILED - MAP WILL SHOW NO POSITIONS"
+    row=$(( row + 1 ))
+    say 1 $row "  (NEEDS lib/curl, WI-FI, AND $AIRPORT IN"
+    row=$(( row + 1 ))
+    say 1 $row "  data/airports.txt)"
+fi
+rm -f "$PT_TMP.pos"
+row=$(( row + 2 ))
+
 say 1 $row "$LRULE"
 row=$(( row + 1 ))
-say 1 $row "PRESS ANY KEY TO GET THE MENU BACK"
+say 1 $row "PRESS ANY KEY TO GO BACK"
 exit 0

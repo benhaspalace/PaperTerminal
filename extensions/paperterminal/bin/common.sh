@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="2.1.0"
+PT_VERSION="3.0.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -61,10 +61,11 @@ cfg() { sed -n "s/^$1=//p" "$PT_CONF" 2>/dev/null | head -n 1 | tr -d '\r'; }
 
 load_conf() {
     [ -f "$PT_CONF" ] || save_conf_defaults
-    AIRPORT="$(cfg AIRPORT)";   [ -n "$AIRPORT" ]  || AIRPORT="ZRH"
-    FEED_URL="$(cfg FEED_URL)"; [ -n "$FEED_URL" ] || FEED_URL="http://192.168.0.10:8091/feed"
-    FEED_URL2="$(cfg FEED_URL2)"
-    FEED_URL3="$(cfg FEED_URL3)"
+    AIRPORT="$(cfg AIRPORT)"; [ -n "$AIRPORT" ] || AIRPORT="ZRH"
+    SOURCE1="$(cfg SOURCE1)"
+    SOURCE2="$(cfg SOURCE2)"
+    SOURCE3="$(cfg SOURCE3)"
+    [ -n "$SOURCE1$SOURCE2$SOURCE3" ] || SOURCE1="aeroapi,PUT_YOUR_KEY_HERE"
     ROWS="$(cfg ROWS)"
     case "$ROWS" in ''|*[!0-9]*) ROWS=12;; esac
     [ "$ROWS" -gt 14 ] && ROWS=14
@@ -75,44 +76,62 @@ load_conf() {
     case "$RANGE" in ''|*[!0-9]*) RANGE=32;; esac
     [ "$RANGE" -gt 200 ] && RANGE=200
     [ "$RANGE" -lt 8 ]   && RANGE=8
+    CACHE="$(cfg CACHE)"
+    case "$CACHE" in ''|*[!0-9]*) CACHE=300;; esac
+    KEY_MENU="$(cfg KEY_MENU)"; case "$KEY_MENU" in ''|*[!0-9]*) KEY_MENU=139;; esac
+    KEY_BACK="$(cfg KEY_BACK)"; case "$KEY_BACK" in ''|*[!0-9]*) KEY_BACK=158;; esac
+    KEY_HOME="$(cfg KEY_HOME)"; case "$KEY_HOME" in ''|*[!0-9]*) KEY_HOME=102;; esac
+    INPUT_DEVS="$(cfg INPUT_DEVS)"
+    [ -n "$INPUT_DEVS" ] || INPUT_DEVS="/dev/input/event0 /dev/input/event1 /dev/input/event2"
 }
 
 save_conf() {
     cat > "$PT_CONF" <<EOF
 # PaperTerminal settings - safe to edit over USB.
-# AIRPORT  : default airport code (IATA like ZRH; ICAO also fine for AeroAPI)
-# FEED_URL : your feed endpoint (see server/feed_proxy.py in the repo).
-#            https:// works via the bundled lib/curl and is verified with
-#            lib/cacert.pem; plain http:// works even without lib/
-#            (busybox wget fallback).
-# FEED_URL2/FEED_URL3 : optional backup feeds, tried in order when the
-#            previous one fails (leave empty if unused)
+# AIRPORT  : default airport code (IATA like ZRH; ICAO like LSZH also works
+#            for AeroAPI; add coordinates to data/airports.txt for the map)
+# SOURCE1-3: public flight-data APIs, tried in order until one answers.
+#            Format TYPE,APIKEY with TYPE one of:
+#              aeroapi        FlightAware AeroAPI (runway data; needs lib/curl)
+#              aviationstack  aviationstack.com (no runway data)
 # ROWS     : flights per board, 1..14; also the per-side count for the
 #            live traffic map (ROWS before + ROWS after now)
 # REFRESH  : auto-redraw interval in seconds, 0 = draw once
 # RANGE    : live traffic map radius in nautical miles, 8..200
+# CACHE    : seconds to reuse fetched data (protects your API quota)
+# KEY_*    : keycodes for on-device navigation (see the key test screen)
 AIRPORT=$AIRPORT
-FEED_URL=$FEED_URL
-FEED_URL2=$FEED_URL2
-FEED_URL3=$FEED_URL3
+SOURCE1=$SOURCE1
+SOURCE2=$SOURCE2
+SOURCE3=$SOURCE3
 ROWS=$ROWS
 REFRESH=$REFRESH
 RANGE=$RANGE
+CACHE=$CACHE
+KEY_MENU=$KEY_MENU
+KEY_BACK=$KEY_BACK
+KEY_HOME=$KEY_HOME
+INPUT_DEVS=$INPUT_DEVS
 EOF
 }
 
 save_conf_defaults() {
     AIRPORT="ZRH"
-    FEED_URL="http://192.168.0.10:8091/feed"
-    FEED_URL2=""
-    FEED_URL3=""
+    SOURCE1="aeroapi,PUT_YOUR_KEY_HERE"
+    SOURCE2=""
+    SOURCE3=""
     ROWS=12
     REFRESH=0
     RANGE=32
+    CACHE=300
+    KEY_MENU=139
+    KEY_BACK=158
+    KEY_HOME=102
+    INPUT_DEVS="/dev/input/event0 /dev/input/event1 /dev/input/event2"
     save_conf
 }
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" > "$PT_LOG" 2>/dev/null; }
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$PT_LOG" 2>/dev/null; }
 
 # ----------------------------------------------------------------- fetch ---
 
@@ -168,31 +187,11 @@ pt_fetch() {
     [ -s "$2" ]
 }
 
-# pt_fetch_feed <query-string> <outfile> - failover fetch: try FEED_URL,
-# FEED_URL2, FEED_URL3 in order until one returns valid flight lines.
-# Sets PT_FEED_USED to the index of the feed that answered (1..3).
-pt_fetch_feed() {
-    PT_FEED_USED=0
-    _idx=0
-    for _u in "$FEED_URL" "$FEED_URL2" "$FEED_URL3"; do
-        _idx=$(( _idx + 1 ))
-        [ -n "$_u" ] || continue
-        rm -f "$2"
-        if pt_fetch "$_u?$1" "$2" && [ -s "$2" ] \
-           && grep -q '^[AD]|.*|.*|.*|.*|.*|' "$2"; then
-            PT_FEED_USED=$_idx
-            return 0
-        fi
-        log "feed $_idx failed: $_u?$1"
-    done
-    return 1
-}
-
-# Number of configured feed URLs (for messages).
-pt_feed_count() {
-    _n=0
-    for _u in "$FEED_URL" "$FEED_URL2" "$FEED_URL3"; do
-        [ -n "$_u" ] && _n=$(( _n + 1 ))
-    done
-    echo $_n
+# Crash diagnosis: call from long-running entry points to capture all
+# stderr into the log (kept small).
+pt_capture_errors() {
+    if [ -f "$PT_LOG" ] && [ "$(wc -c < "$PT_LOG")" -gt 16000 ]; then
+        tail -n 40 "$PT_LOG" > "$PT_LOG.t" 2>/dev/null && mv "$PT_LOG.t" "$PT_LOG"
+    fi
+    exec 2>>"$PT_LOG"
 }

@@ -1,9 +1,10 @@
 #!/bin/sh
 # PaperTerminal - live traffic map: plots the ADS-B positions of the ROWS
-# flights before and after now (feed window=split) around the airport.
+# flights before and after now (window=split) around the airport.
 # v = arrival, ^ = departure, + = the airport. RANGE (nm) sets the scale.
 
 . "$(dirname "$0")/common.sh"
+. "$(dirname "$0")/sources.sh"
 
 load_conf
 
@@ -62,7 +63,7 @@ draw_map() {
         "$n" "$faroff" "$nopos")"
     say 1 36 "$LRULE"
     SRC="RANGE ${RANGE}NM"
-    [ "$PT_FEED_USED" -gt 1 ] && SRC="RANGE ${RANGE}NM (BACKUP FEED $PT_FEED_USED)"
+    [ "$PT_SRC_USED" -gt 1 ] && SRC="RANGE ${RANGE}NM (BACKUP SOURCE $PT_SRC_USED)"
     say 1 37 "$SRC"
     say_r 37 "UPD $(date +%H:%M)"
 }
@@ -72,24 +73,39 @@ draw_error() {
     say 1 1 "PAPERTERMINAL"
     say_r 1 "$AIRPORT LIVE TRAFFIC"
     say 1 2 "$HRULE"
-    say 1 6 "  NO FEED - SEE THE BOARD SCREENS OR RUN"
-    say 1 7 "  KUAL > NETWORK SELF-TEST (HTTPS)"
+    say 1 6 "  NO DATA - ALL SOURCES FAILED. RUN THE"
+    say 1 7 "  NETWORK SELF-TEST TO PINPOINT WHY."
     say 1 36 "$LRULE"
-    say 1 37 "FEED DOWN"
+    say 1 37 "NO DATA"
     say_r 37 "UPD $(date +%H:%M)"
 }
 
+# Fetch the split window of flights, then fill in DX/DY from a direct
+# ADS-B lookup, matching by callsign (field 10).
 get_feed() {
     FEED_OK=0
-    if pt_fetch_feed "airport=$AIRPORT&dir=all&limit=$ROWS&window=split" "$PT_TMP"; then
-        FEED_OK=1
+    src_fetch all split "$ROWS" "$PT_TMP" || return 1
+    if src_positions "$PT_TMP.pos"; then
+        awk -F'|' '
+            NR == FNR { if (NF >= 3 && $1 != "") { dx[$1] = $2; dy[$1] = $3 } next }
+            /^[AD]\|/ {
+                d8 = $8; d9 = $9
+                if ((d8 == "" || d9 == "") && $10 != "" && ($10 in dx)) {
+                    d8 = dx[$10]; d9 = dy[$10]
+                }
+                print $1"|"$2"|"$3"|"$4"|"$5"|"$6"|"$7"|"d8"|"d9
+            }' "$PT_TMP.pos" "$PT_TMP" > "$PT_TMP.m" \
+            && mv "$PT_TMP.m" "$PT_TMP"
     fi
+    rm -f "$PT_TMP.pos"
+    FEED_OK=1
 }
 
 get_feed
 if [ "$FEED_OK" = 1 ]; then draw_map; else draw_error; fi
 
-if [ "$REFRESH" -gt 0 ]; then
+# Skipped under nav.sh (PT_ONCE=1): keypresses drive redraws there.
+if [ "$REFRESH" -gt 0 ] && [ "$PT_ONCE" != "1" ]; then
     i=0
     while [ $i -lt 30 ]; do
         sleep "$REFRESH"
