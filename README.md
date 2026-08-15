@@ -49,8 +49,9 @@ curl/openssl/wget are 2010-era and deliberately never used for TLS.
 - Bundled HTTPS stack: static curl 8.21 with OpenSSL 3.5 LTS inside and an
   up-to-date Mozilla CA root bundle, built for the K3's ARMv6 CPU and 2.6
   kernel — `https://` feed URLs work, verified against real certificates,
-  so the proxy can live anywhere on the internet, not just your LAN
-- On-device network self-test screen (checks the TLS stack, then the feed)
+  so the proxy can live anywhere on the internet
+- On-device network self-test screen (checks the TLS stack, then each
+  configured feed)
 - Optional auto-refresh
 - When the feed is unreachable, the board shows a diagnostic screen that
   points at the failing step instead of stale or fake data
@@ -208,7 +209,7 @@ landed or departed; not-yet-departed scheduled flights show `-`.
 
 ### Feed protocol
 
-Anything that can serve this trivial format over plain HTTP works as a
+Anything that can serve this trivial format over HTTP or HTTPS works as a
 backend — the proxy is just a convenience:
 
 ```
@@ -252,7 +253,7 @@ extensions/paperterminal/   the KUAL extension (copy this to the Kindle)
   lib/BUILDINFO.txt         provenance: versions, checksums, target
 build/build-https-stack.sh  reproducible cross-build of lib/ from source
 .github/workflows/          CI: rebuild + test + refresh the HTTPS stack
-server/feed_proxy.py        feed proxy for live data (LAN or internet)
+server/feed_proxy.py        flight data feed proxy (LAN or internet)
 ```
 
 ## Troubleshooting

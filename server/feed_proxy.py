@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """PaperTerminal feed proxy.
 
-The Kindle 3 cannot speak modern HTTPS, so it fetches its flight data as a
-tiny plain-text feed over plain HTTP. This proxy runs on any machine on your
-LAN (laptop, Raspberry Pi, NAS) and converts a real flight-data API into
-that feed.
+PaperTerminal fetches its flight data as a tiny plain-text feed over HTTP
+or HTTPS (the extension bundles a modern curl + CA roots for TLS). This
+proxy runs on any machine — on your LAN or anywhere on the internet — and
+converts real flight-data APIs into that feed.
 
 Feed protocol v3 (what the Kindle requests):
 
