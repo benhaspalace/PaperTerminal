@@ -6,19 +6,22 @@ tiny plain-text feed over plain HTTP. This proxy runs on any machine on your
 LAN (laptop, Raspberry Pi, NAS) and converts a real flight-data API into
 that feed.
 
-Feed protocol (what the Kindle requests):
+Feed protocol v2 (what the Kindle requests):
 
-    GET /feed?airport=ZRH&dir=arr&limit=12
+    GET /feed?airport=ZRH&dir=arr&limit=12      dir: arr | dep | all
 
     200 OK, text/plain, one flight per line:
 
-        #PAPERTERMINAL 1 OK ZRH ARR
-        13:41|LX1073|SWISS|A20N|14
-        13:46|BA710|BRITISH AIRWAYS|A320|14
+        #PAPERTERMINAL 2 OK ZRH ALL
+        A|13:41|LX1073|SWISS|A20N|14|BUD
+        D|13:44|LX316|SWISS|BCS3|28|LCY
         ...
 
-    Fields: TIME|FLIGHT|AIRLINE|TYPE|RUNWAY. Lines starting with '#' are
-    comments. Runway is '-' when the backend does not provide one.
+    Fields: DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT. DIR is A for an
+    arrival or D for a departure; AIRPORT is the origin airport for
+    arrivals and the destination for departures. dir=all interleaves both
+    directions sorted by time. Lines starting with '#' are comments.
+    Runway/airport are '-' when the backend does not provide them.
 
 Backends:
 
@@ -98,70 +101,90 @@ def airline_name(code, fallback=""):
 
 # ------------------------------------------------------------- backends ---
 
+# Per-direction lookup tables: response groups, time-field preference,
+# runway field, the other endpoint of the flight, and the feed DIR tag.
+AEROAPI_SIDES = {
+    "arr": (("arrivals", "scheduled_arrivals"),
+            ("actual_on", "estimated_on", "scheduled_on"),
+            "actual_runway_on", "origin", "A"),
+    "dep": (("departures", "scheduled_departures"),
+            ("actual_off", "estimated_off", "scheduled_off"),
+            "actual_runway_off", "destination", "D"),
+}
+
+
+def sides_for(direction):
+    return ("arr", "dep") if direction == "all" else (direction,)
+
+
 def rows_aeroapi(key, airport, direction, limit):
+    # One /flights call carries arrivals and departures alike.
     url = ("https://aeroapi.flightaware.com/aeroapi/airports/"
            f"{urllib.parse.quote(airport)}/flights?max_pages=1")
     data = http_get_json(url, {"x-apikey": key})
 
-    if direction == "arr":
-        groups = ("arrivals", "scheduled_arrivals")
-        time_keys = ("actual_on", "estimated_on", "scheduled_on")
-        runway_key = "actual_runway_on"
-    else:
-        groups = ("departures", "scheduled_departures")
-        time_keys = ("actual_off", "estimated_off", "scheduled_off")
-        runway_key = "actual_runway_off"
-
     rows = []
-    for group in groups:
-        for f in data.get(group) or []:
-            ts = None
-            for k in time_keys:
-                ts = parse_ts(f.get(k))
-                if ts:
-                    break
-            if ts is None:
-                continue
-            flight = f.get("ident_iata") or f.get("ident") or "-"
-            carrier = f.get("operator_iata") or f.get("operator") or flight[:2]
-            rows.append({
-                "ts": ts,
-                "flight": flight,
-                "airline": airline_name(carrier, f.get("operator")),
-                "actype": f.get("aircraft_type") or "-",
-                "runway": f.get(runway_key) or "-",
-            })
+    for side in sides_for(direction):
+        groups, time_keys, runway_key, other_key, tag = AEROAPI_SIDES[side]
+        for group in groups:
+            for f in data.get(group) or []:
+                ts = None
+                for k in time_keys:
+                    ts = parse_ts(f.get(k))
+                    if ts:
+                        break
+                if ts is None:
+                    continue
+                flight = f.get("ident_iata") or f.get("ident") or "-"
+                carrier = f.get("operator_iata") or f.get("operator") or flight[:2]
+                other = f.get(other_key) or {}
+                rows.append({
+                    "ts": ts,
+                    "dir": tag,
+                    "flight": flight,
+                    "airline": airline_name(carrier, f.get("operator")),
+                    "actype": f.get("aircraft_type") or "-",
+                    "runway": f.get(runway_key) or "-",
+                    "airport": other.get("code_iata") or other.get("code") or "-",
+                })
     return finish_rows(rows, limit)
 
 
 def rows_aviationstack(key, airport, direction, limit):
-    side = "arrival" if direction == "arr" else "departure"
-    params = urllib.parse.urlencode({
-        "access_key": key,
-        "limit": 100,
-        ("arr_iata" if direction == "arr" else "dep_iata"): airport,
-    })
-    data = http_get_json(f"http://api.aviationstack.com/v1/flights?{params}")
-
     rows = []
-    for f in data.get("data") or []:
-        if (f.get("flight_status") or "") == "cancelled":
-            continue
-        seg = f.get(side) or {}
-        ts = (parse_ts(seg.get("actual"))
-              or parse_ts(seg.get("estimated"))
-              or parse_ts(seg.get("scheduled")))
-        if ts is None:
-            continue
-        flight_info = f.get("flight") or {}
-        aircraft = f.get("aircraft") or {}
-        rows.append({
-            "ts": ts,
-            "flight": flight_info.get("iata") or flight_info.get("icao") or "-",
-            "airline": (f.get("airline") or {}).get("name") or "-",
-            "actype": aircraft.get("iata") or "-",
-            "runway": "-",  # aviationstack has no runway data
+    for side in sides_for(direction):
+        if side == "arr":
+            seg_key, other_key, filter_key, tag = "arrival", "departure", "arr_iata", "A"
+        else:
+            seg_key, other_key, filter_key, tag = "departure", "arrival", "dep_iata", "D"
+        params = urllib.parse.urlencode({
+            "access_key": key,
+            "limit": 100,
+            filter_key: airport,
         })
+        data = http_get_json(f"http://api.aviationstack.com/v1/flights?{params}")
+
+        for f in data.get("data") or []:
+            if (f.get("flight_status") or "") == "cancelled":
+                continue
+            seg = f.get(seg_key) or {}
+            ts = (parse_ts(seg.get("actual"))
+                  or parse_ts(seg.get("estimated"))
+                  or parse_ts(seg.get("scheduled")))
+            if ts is None:
+                continue
+            flight_info = f.get("flight") or {}
+            aircraft = f.get("aircraft") or {}
+            other = f.get(other_key) or {}
+            rows.append({
+                "ts": ts,
+                "dir": tag,
+                "flight": flight_info.get("iata") or flight_info.get("icao") or "-",
+                "airline": (f.get("airline") or {}).get("name") or "-",
+                "actype": aircraft.get("iata") or "-",
+                "runway": "-",  # aviationstack has no runway data
+                "airport": other.get("iata") or other.get("icao") or "-",
+            })
     return finish_rows(rows, limit)
 
 
@@ -173,16 +196,18 @@ def finish_rows(rows, limit):
 
     lines, seen = [], set()
     for r in rows:
-        if r["flight"] in seen:
+        if (r["dir"], r["flight"]) in seen:
             continue
-        seen.add(r["flight"])
+        seen.add((r["dir"], r["flight"]))
         local = r["ts"].astimezone()  # server's local time zone
         lines.append("|".join((
+            r["dir"],
             local.strftime("%H:%M"),
-            str(r["flight"])[:8],
-            str(r["airline"]).upper()[:17],
+            str(r["flight"])[:7],
+            str(r["airline"]).upper()[:16],
             str(r["actype"]).upper()[:4],
             str(r["runway"]).upper()[:3],
+            str(r["airport"]).upper()[:4],
         )))
         if len(lines) >= limit:
             break
@@ -226,7 +251,7 @@ class FeedHandler(BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed.query)
         airport = (qs.get("airport", [self.args.default_airport])[0] or "").upper()
         direction = qs.get("dir", ["arr"])[0].lower()
-        direction = direction if direction in ("arr", "dep") else "arr"
+        direction = direction if direction in ("arr", "dep", "all") else "arr"
         try:
             limit = max(1, min(20, int(qs.get("limit", ["12"])[0])))
         except ValueError:
@@ -247,7 +272,7 @@ class FeedHandler(BaseHTTPRequestHandler):
                 self.send_text(502, f"#ERR upstream: {exc}\n")
                 return
 
-        header = f"#PAPERTERMINAL 1 OK {airport} {direction.upper()}\n"
+        header = f"#PAPERTERMINAL 2 OK {airport} {direction.upper()}\n"
         self.send_text(200, header + "\n".join(lines[:limit]) + "\n")
 
     def send_text(self, status, body):

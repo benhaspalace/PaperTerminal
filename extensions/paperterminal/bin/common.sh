@@ -12,7 +12,7 @@ PT_DATA="$PT_HOME/data"
 PT_LOG="$PT_HOME/paperterminal.log"
 PT_TMP="/tmp/paperterminal.feed"
 
-PT_VERSION="1.0.0"
+PT_VERSION="1.1.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid

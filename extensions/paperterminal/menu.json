@@ -6,6 +6,7 @@
             "items": [
                 { "name": "Arrivals board",   "action": "bin/board.sh", "params": "arr" },
                 { "name": "Departures board", "action": "bin/board.sh", "params": "dep" },
+                { "name": "Combined board (arr + dep)", "action": "bin/board.sh", "params": "all" },
                 {
                     "name": "Set default airport",
                     "items": [

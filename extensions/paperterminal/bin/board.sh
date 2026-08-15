@@ -1,21 +1,19 @@
 #!/bin/sh
 # PaperTerminal - draw the arrival/departure board.
-# usage: board.sh arr|dep
+# usage: board.sh arr|dep|all
 
 . "$(dirname "$0")/common.sh"
 
 DIR="$1"
-[ "$DIR" = "dep" ] || DIR="arr"
+case "$DIR" in arr|dep|all) ;; *) DIR="arr" ;; esac
 
 load_conf
 
-if [ "$DIR" = "arr" ]; then
-    TITLE="ARRIVALS"
-    PICT='\v'
-else
-    TITLE="DEPARTURES"
-    PICT='/^'
-fi
+case "$DIR" in
+    arr) TITLE="ARRIVALS";    PICT='\v';   DCOL="FROM"  ;;
+    dep) TITLE="DEPARTURES";  PICT='/^';   DCOL="TO"    ;;
+    all) TITLE="ALL FLIGHTS"; PICT='\v/^'; DCOL="FR/TO" ;;
+esac
 
 # ------------------------------------------------------------------ time ---
 # Demo data stores times as offsets in minutes from "now" (+12 / -4) so the
@@ -45,9 +43,11 @@ fmt_time() {
 }
 
 # ------------------------------------------------------------------ feed ---
-# Feed line format:  TIME|FLIGHT|AIRLINE|TYPE|RUNWAY
-# Lines starting with # are comments. In demo mode (or when the live feed
-# is unreachable) the bundled demo files are used instead.
+# Feed line format (v2):  DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT
+# DIR is A (arrival) or D (departure); AIRPORT is the origin for arrivals
+# and the destination for departures. Lines starting with # are comments.
+# In demo mode (or when the live feed is unreachable) the bundled demo
+# files are used instead.
 
 get_feed() {
     SOURCE="DEMO DATA"
@@ -72,7 +72,7 @@ get_feed() {
     done
     wait "$wpid" 2>/dev/null
 
-    if [ -s "$PT_TMP" ] && grep -q '|.*|.*|.*|' "$PT_TMP"; then
+    if [ -s "$PT_TMP" ] && grep -q '^[AD]|.*|.*|.*|.*|.*|' "$PT_TMP"; then
         SOURCE="LIVE $AIRPORT"
         FEED_FILE="$PT_TMP"
     else
@@ -89,20 +89,26 @@ draw_board() {
     say 1 1 "PAPERTERMINAL"
     say_r 1 "$AIRPORT $PICT $TITLE"
     say 1 2 "$HRULE"
-    say 1 3 "$(printf '%-2s %-5s %-8s %-17s %-4s %-3s' '' 'TIME' 'FLIGHT' 'AIRLINE' 'TYPE' 'RWY')"
+    say 1 3 "$(printf '%-2s %-5s %-7s %-5s %-16s %-4s %-3s' '' 'TIME' 'FLIGHT' "$DCOL" 'AIRLINE' 'TYPE' 'RWY')"
     say 1 4 "$LRULE"
 
     row=6
     count=0
-    while IFS='|' read -r T FL AL TY RW; do
-        case "$T" in ''|\#*) continue;; esac
+    while IFS='|' read -r D T FL AL TY RW AP; do
+        case "$D" in
+            ''|\#*) continue ;;
+            A) RP='\v' ;;
+            D) RP='/^' ;;
+            *) continue ;;
+        esac
         [ $count -ge "$ROWS" ] && break
-        RW="${RW%%|*}"
-        RW="$(echo "$RW" | tr -d '\r')"
+        AP="${AP%%|*}"
+        AP="$(echo "$AP" | tr -d '\r')"
+        [ -n "$AP" ] || AP="-"
         [ -n "$RW" ] || RW="-"
         [ -n "$TY" ] || TY="-"
-        line="$(printf '%-2s %-5.5s %-8.8s %-17.17s %-4.4s %-3.3s' \
-            "$PICT" "$(fmt_time "$T")" "$FL" "$AL" "$TY" "$RW")"
+        line="$(printf '%-2s %-5.5s %-7.7s %-5.5s %-16.16s %-4.4s %-3.3s' \
+            "$RP" "$(fmt_time "$T")" "$FL" "$AP" "$AL" "$TY" "$RW")"
         say 1 $row "$line"
         row=$(( row + 2 ))
         count=$(( count + 1 ))

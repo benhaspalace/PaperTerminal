@@ -5,23 +5,23 @@ A lightweight airport arrival/departure board for the **Kindle 3 Keyboard**
 extension. It turns the 600x800 e-ink screen into a classic flight board:
 
 ```
- PAPERTERMINAL                    ZRH \v ARRIVALS
+ PAPERTERMINAL                ZRH \v/^ ALL FLIGHTS
  ================================================
-     TIME  FLIGHT   AIRLINE           TYPE RWY
+    TIME  FLIGHT  FR/TO AIRLINE          TYPE RWY
  ------------------------------------------------
- \v  13:41 LX 1073  SWISS             A20N 14
- \v  13:46 BA 710   BRITISH AIRWAYS   A320 14
- \v  13:51 WK 205   EDELWEISS         A343 16
- \v  13:54 LH 1186  LUFTHANSA         A21N 14
- \v  13:58 KL 1955  KLM               E195 16
- \v  14:02 AF 1114  AIR FRANCE        A319 14
+ \v 13:41 LX 1073 BUD   SWISS            A20N 14
+ /^ 13:44 LX 316  LCY   SWISS            BCS3 28
+ \v 13:46 BA 710  LHR   BRITISH AIRWAYS  A320 14
+ /^ 13:48 LH 1187 FRA   LUFTHANSA        A21N 28
+ \v 13:51 WK 205  PMI   EDELWEISS        A343 16
+ /^ 13:54 BA 711  LHR   BRITISH AIRWAYS  A320 28
  ------------------------------------------------
  DEMO DATA                              UPD 13:55
 ```
 
-Each row shows the **time, airline, flight number, aircraft type, runway
-used**, and an arrival/departure **pictogram** (`\v` = arriving,
-`/^` = departing).
+Each row shows the **time, airline, flight number, origin/destination
+airport, aircraft type, runway used**, and an arrival/departure
+**pictogram** (`\v` = arriving from, `/^` = departing to).
 
 Everything on the device is plain POSIX shell drawn with `eips` — no Python,
 no Java, no extra binaries — so it runs comfortably on the K3's 256 MB of
@@ -29,7 +29,9 @@ RAM and ancient busybox.
 
 ## Features
 
-- Arrivals board and departures board, launched from the KUAL menu
+- Arrivals board, departures board, and a combined board that interleaves
+  both directions sorted by time, launched from the KUAL menu
+- Origin airport shown for arrivals, destination for departures
 - Default airport: pick from a preset menu, or set **any** IATA/ICAO code by
   editing a config file over USB
 - Demo mode that works fully offline (sample flights with times generated
@@ -74,9 +76,11 @@ RAM and ancient busybox.
 
 From the KUAL menu:
 
-- **Arrivals board** / **Departures board** — draws the board for the
-  default airport. The board stays on screen until you press a key (the
-  keypress makes the Kindle repaint its normal UI — that's expected).
+- **Arrivals board** / **Departures board** / **Combined board** — draws
+  the board for the default airport (the combined board mixes arrivals and
+  departures, sorted by time). The board stays on screen until you press a
+  key (the keypress makes the Kindle repaint its normal UI — that's
+  expected).
 - **Set default airport** — pick from common airports (ZRH, GVA, LHR, LGW,
   AMS, CDG, FRA, MUC, VIE, BUD, JFK).
 - **Switch demo / live mode** — toggles the data source.
@@ -130,15 +134,18 @@ Anything that can serve this trivial format over plain HTTP works as a
 backend — the proxy is just a convenience:
 
 ```
-GET /feed?airport=ZRH&dir=arr&limit=12
+GET /feed?airport=ZRH&dir=all&limit=12      dir: arr | dep | all
 
-#PAPERTERMINAL 1 OK ZRH ARR
-13:41|LX1073|SWISS|A20N|14
-13:46|BA710|BRITISH AIRWAYS|A320|14
+#PAPERTERMINAL 2 OK ZRH ALL
+A|13:41|LX1073|SWISS|A20N|14|BUD
+D|13:44|LX316|SWISS|BCS3|28|LCY
 ```
 
-One flight per line: `TIME|FLIGHT|AIRLINE|TYPE|RUNWAY`. Lines starting with
-`#` are ignored by the device.
+One flight per line: `DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT`, where
+`DIR` is `A` (arrival) or `D` (departure) and `AIRPORT` is the origin for
+arrivals and the destination for departures. `dir=all` returns both
+directions interleaved and sorted by time. Lines starting with `#` are
+ignored by the device.
 
 ## Repository layout
 
