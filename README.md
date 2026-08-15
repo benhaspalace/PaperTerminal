@@ -37,6 +37,15 @@ curl/openssl/wget are 2010-era and deliberately never used for TLS.
   editing a config file over USB
 - Live flight data from a tiny feed proxy (`server/feed_proxy.py`) with
   real runway data via FlightAware
+- **Live traffic map**: plots the ADS-B positions of the ROWS flights
+  before and after now around your airport (`v` arriving, `^` departing,
+  `+` the airport), with a distance legend — positions come from open
+  ADS-B aggregators, no extra API key
+- **Runway diagrams**: simple line drawings for ZRH, BUD, AMS and STR
+  (plain-text files — add your own airport in minutes)
+- **Failover everywhere**: up to three feed URLs tried in order on the
+  device, a primary + fallback flight-data backend in the proxy, and
+  multiple ADS-B sources for positions
 - Bundled HTTPS stack: static curl 8.21 with OpenSSL 3.5 LTS inside and an
   up-to-date Mozilla CA root bundle, built for the K3's ARMv6 CPU and 2.6
   kernel — `https://` feed URLs work, verified against real certificates,
@@ -88,14 +97,21 @@ From the KUAL menu:
   departures, sorted by time). The board stays on screen until you press a
   key (the keypress makes the Kindle repaint its normal UI — that's
   expected).
+- **Live traffic map** — a scaled plan view of the airspace around the
+  default airport: the ROWS flights before and after the current time,
+  plotted from live ADS-B positions with a flight/distance legend.
+  `RANGE` in the config sets the radius (default 32 nm).
+- **Runway diagram** — a simple line drawing of the airport's runways
+  (bundled: ZRH, BUD, AMS, STR; drop a text file into `data/runways/` for
+  any other airport).
 - **Set default airport** — pick from common airports (ZRH, GVA, LHR, LGW,
   AMS, CDG, FRA, MUC, VIE, BUD, JFK).
 - **Network self-test (HTTPS)** — checks the bundled TLS stack, then an
-  HTTPS fetch from the internet, then your configured feed.
+  HTTPS fetch from the internet, then each configured feed in turn.
 - **Help + current settings** — shows the active configuration on screen.
 
-If the feed can't be reached, the board draws a diagnostic screen naming
-the URL it tried and the usual causes, instead of showing stale data.
+If no configured feed can be reached, the board draws a diagnostic screen
+naming what it tried and the usual causes, instead of showing stale data.
 
 ### Configuration file
 
@@ -105,8 +121,11 @@ which you can edit over USB with any text editor:
 ```
 AIRPORT=ZRH      # any IATA (ZRH) or, for AeroAPI, ICAO (LSZH) code
 FEED_URL=http://192.168.0.10:8091/feed   # or https://... (bundled curl)
-ROWS=12          # flights per board, 1..14
+FEED_URL2=       # optional backup feeds, tried in order
+FEED_URL3=       # when the previous one fails
+ROWS=12          # flights per board; also per-side count on the map
 REFRESH=0        # redraw every N seconds (0 = draw once)
+RANGE=32         # live traffic map radius in nautical miles
 ```
 
 This is also how you set an airport that isn't in the preset menu.
@@ -155,7 +174,19 @@ python3 server/feed_proxy.py --backend aeroapi --key YOUR_AEROAPI_KEY
 
 # Or with aviationstack (free key; no runway data, shown as '-'):
 python3 server/feed_proxy.py --backend aviationstack --key YOUR_KEY
+
+# With flight-data failover - aviationstack answers when AeroAPI fails:
+python3 server/feed_proxy.py --backend aeroapi --key K1 \
+    --backend2 aviationstack --key2 K2
 ```
+
+Live aircraft positions for the traffic map are fetched from open ADS-B
+aggregators (api.adsb.lol, then opendata.adsb.fi as fallback — no API key
+needed), matched to flights by callsign, and attached to feed lines as
+whole-nautical-mile east/north offsets from the airport. Positions are
+available for airports in the proxy's `AIRPORT_COORDS` table (ZRH, BUD,
+AMS, STR and other majors are included — extend it for yours, or use
+`--no-adsb` to disable lookups).
 
 Then set on the Kindle:
 
@@ -181,18 +212,25 @@ Anything that can serve this trivial format over plain HTTP works as a
 backend — the proxy is just a convenience:
 
 ```
-GET /feed?airport=ZRH&dir=all&limit=12      dir: arr | dep | all
+GET /feed?airport=ZRH&dir=all&limit=12&window=ahead
+    dir:    arr | dep | all
+    window: ahead (default) | split
 
-#PAPERTERMINAL 2 OK ZRH ALL
-A|13:41|LX1073|SWISS|A20N|14|BUD
-D|13:44|LX316|SWISS|BCS3|28|LCY
+#PAPERTERMINAL 3 OK ZRH ALL AHEAD
+A|13:41|LX1073|SWISS|A20N|14|BUD|-12|31
+D|13:44|LX316|SWISS|BCS3|28|LCY||
 ```
 
-One flight per line: `DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT`, where
-`DIR` is `A` (arrival) or `D` (departure) and `AIRPORT` is the origin for
-arrivals and the destination for departures. `dir=all` returns both
-directions interleaved and sorted by time. Lines starting with `#` are
-ignored by the device.
+One flight per line: `DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT|DX|DY`,
+where `DIR` is `A` (arrival) or `D` (departure), `AIRPORT` is the origin
+for arrivals and the destination for departures, and `DX`/`DY` are the
+aircraft's live ADS-B position in whole nautical miles east/north of the
+airport (empty when the aircraft isn't currently seen). `dir=all` returns
+both directions interleaved and sorted by time. `window=ahead` returns a
+recent tail plus upcoming flights (`limit` lines — what the boards show);
+`window=split` returns the `limit` flights closest before now **and** the
+`limit` closest after now — the set most likely to be airborne, used by
+the live traffic map. Lines starting with `#` are ignored by the device.
 
 ## Repository layout
 
@@ -202,9 +240,12 @@ extensions/paperterminal/   the KUAL extension (copy this to the Kindle)
   menu.json                 KUAL menu entries
   bin/common.sh             shared helpers (config, eips drawing, fetching)
   bin/board.sh              fetches the feed and draws the board
+  bin/radar.sh              live traffic map from ADS-B positions
+  bin/runways.sh            runway diagram viewer
   bin/set_airport.sh        writes the default airport
   bin/nettest.sh            on-device network / HTTPS self-test
   bin/help.sh               on-device help screen
+  data/runways/*.txt        runway line drawings (ZRH, BUD, AMS, STR)
   lib/curl                  static modern curl + OpenSSL for the K3
   lib/openssl               static OpenSSL CLI for debugging
   lib/cacert.pem            Mozilla CA root bundle

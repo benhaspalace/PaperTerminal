@@ -6,24 +6,32 @@ tiny plain-text feed over plain HTTP. This proxy runs on any machine on your
 LAN (laptop, Raspberry Pi, NAS) and converts a real flight-data API into
 that feed.
 
-Feed protocol v2 (what the Kindle requests):
+Feed protocol v3 (what the Kindle requests):
 
-    GET /feed?airport=ZRH&dir=arr&limit=12      dir: arr | dep | all
+    GET /feed?airport=ZRH&dir=arr&limit=12&window=ahead
+        dir:    arr | dep | all
+        window: ahead (default) - recent tail + upcoming, `limit` lines
+                split - `limit` flights BEFORE now and `limit` AFTER now
+                        (the ones most likely to be in the air), so up to
+                        2 x limit lines
 
     200 OK, text/plain, one flight per line:
 
-        #PAPERTERMINAL 2 OK ZRH ALL
-        A|13:41|LX1073|SWISS|A20N|14|BUD
-        D|13:44|LX316|SWISS|BCS3|28|LCY
+        #PAPERTERMINAL 3 OK ZRH ALL AHEAD
+        A|13:41|LX1073|SWISS|A20N|14|BUD|-12|31
+        D|13:44|LX316|SWISS|BCS3|28|LCY||
         ...
 
-    Fields: DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT. DIR is A for an
-    arrival or D for a departure; AIRPORT is the origin airport for
-    arrivals and the destination for departures. dir=all interleaves both
-    directions sorted by time. Lines starting with '#' are comments.
-    Runway/airport are '-' when the backend does not provide them.
+    Fields: DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT|DX|DY. DIR is A
+    for an arrival or D for a departure; AIRPORT is the origin airport
+    for arrivals and the destination for departures. DX/DY are the
+    aircraft's live ADS-B position in whole nautical miles east/north of
+    the requested airport (empty when the aircraft isn't currently seen).
+    dir=all interleaves both directions sorted by time. Lines starting
+    with '#' are comments. Runway/airport are '-' when the backend does
+    not provide them.
 
-Backends:
+Flight-data backends (primary + optional --backend2 fallback):
 
     aeroapi        FlightAware AeroAPI v4 (https://www.flightaware.com/aeroapi)
                    Has actual runway used (on landed/departed flights) and
@@ -33,14 +41,20 @@ Backends:
     aviationstack  https://aviationstack.com - free key, plain airline names
                    and IATA aircraft types, but no runway data ('-').
 
+Live positions come from open ADS-B aggregators (no key needed), tried in
+order until one answers: api.adsb.lol, then opendata.adsb.fi. Positions
+are matched to flights by callsign and only attached for airports listed
+in AIRPORT_COORDS (extend the table for yours).
+
 Usage:
 
     python3 feed_proxy.py --backend aeroapi --key YOUR_KEY
-    python3 feed_proxy.py --backend aviationstack --key YOUR_KEY --port 8091
+    python3 feed_proxy.py --backend aeroapi --key K1 \
+        --backend2 aviationstack --key2 K2       # flight-data failover
+    python3 feed_proxy.py --backend aviationstack --key YOUR_KEY --no-adsb
 
 Then on the Kindle set in paperterminal.conf:
 
-    MODE=live
     FEED_URL=http://<this-machine's-LAN-IP>:8091/feed
 
 Only the Python standard library is used. Responses are cached (default
@@ -49,6 +63,7 @@ Only the Python standard library is used. Responses are cached (default
 
 import argparse
 import json
+import math
 import threading
 import time
 import urllib.error
@@ -71,8 +86,26 @@ IATA_AIRLINES = {
     "W6": "WIZZ AIR", "WK": "EDELWEISS",
 }
 
-WINDOW_PAST = timedelta(minutes=45)   # keep recently landed/departed flights
+WINDOW_PAST = timedelta(minutes=45)      # 'ahead': recent tail kept on boards
+WINDOW_PAST_SPLIT = timedelta(hours=3)   # 'split': how far back "before now" reaches
 WINDOW_FUTURE = timedelta(hours=12)
+
+# Airport reference coordinates for ADS-B position lookups (lat, lon).
+# Positions are only attached for airports listed here - add your own.
+AIRPORT_COORDS = {
+    "ZRH": (47.4647, 8.5492),  "LSZH": (47.4647, 8.5492),
+    "BUD": (47.4298, 19.2611), "LHBP": (47.4298, 19.2611),
+    "AMS": (52.3105, 4.7683),  "EHAM": (52.3105, 4.7683),
+    "STR": (48.6899, 9.2210),  "EDDS": (48.6899, 9.2210),
+    "GVA": (46.2381, 6.1090),  "LSGG": (46.2381, 6.1090),
+    "LHR": (51.4700, -0.4543), "EGLL": (51.4700, -0.4543),
+    "LGW": (51.1537, -0.1821), "EGKK": (51.1537, -0.1821),
+    "CDG": (49.0097, 2.5479),  "LFPG": (49.0097, 2.5479),
+    "FRA": (50.0379, 8.5622),  "EDDF": (50.0379, 8.5622),
+    "MUC": (48.3538, 11.7861), "EDDM": (48.3538, 11.7861),
+    "VIE": (48.1103, 16.5697), "LOWW": (48.1103, 16.5697),
+    "JFK": (40.6413, -73.7781), "KJFK": (40.6413, -73.7781),
+}
 
 
 def parse_ts(value):
@@ -117,7 +150,7 @@ def sides_for(direction):
     return ("arr", "dep") if direction == "all" else (direction,)
 
 
-def rows_aeroapi(key, airport, direction, limit):
+def rows_aeroapi(key, airport, direction):
     # One /flights call carries arrivals and departures alike.
     url = ("https://aeroapi.flightaware.com/aeroapi/airports/"
            f"{urllib.parse.quote(airport)}/flights?max_pages=1")
@@ -142,15 +175,17 @@ def rows_aeroapi(key, airport, direction, limit):
                     "ts": ts,
                     "dir": tag,
                     "flight": flight,
+                    # 'ident' is the filed callsign - what ADS-B transmits
+                    "callsign": f.get("ident") or "",
                     "airline": airline_name(carrier, f.get("operator")),
                     "actype": f.get("aircraft_type") or "-",
                     "runway": f.get(runway_key) or "-",
                     "airport": other.get("code_iata") or other.get("code") or "-",
                 })
-    return finish_rows(rows, limit)
+    return rows
 
 
-def rows_aviationstack(key, airport, direction, limit):
+def rows_aviationstack(key, airport, direction):
     rows = []
     for side in sides_for(direction):
         if side == "arr":
@@ -180,25 +215,86 @@ def rows_aviationstack(key, airport, direction, limit):
                 "ts": ts,
                 "dir": tag,
                 "flight": flight_info.get("iata") or flight_info.get("icao") or "-",
+                "callsign": flight_info.get("icao") or "",
                 "airline": (f.get("airline") or {}).get("name") or "-",
                 "actype": aircraft.get("iata") or "-",
                 "runway": "-",  # aviationstack has no runway data
                 "airport": other.get("iata") or other.get("icao") or "-",
             })
-    return finish_rows(rows, limit)
+    return rows
 
 
-def finish_rows(rows, limit):
-    """Window around now, sort, dedupe, format as feed lines."""
+BACKENDS = {"aeroapi": rows_aeroapi, "aviationstack": rows_aviationstack}
+
+
+def select_rows(rows, limit, window):
+    """Sort, dedupe, and window the raw rows.
+
+    window 'ahead': a short just-happened tail plus upcoming flights,
+    `limit` lines in total (what a terminal board shows).
+    window 'split': the `limit` flights closest before now AND the
+    `limit` closest after now - the set most likely to be airborne,
+    which is what the live traffic map wants.
+    """
     now = datetime.now(timezone.utc)
-    rows = [r for r in rows if now - WINDOW_PAST <= r["ts"] <= now + WINDOW_FUTURE]
-    rows.sort(key=lambda r: r["ts"])
-
-    lines, seen = [], set()
-    for r in rows:
-        if (r["dir"], r["flight"]) in seen:
+    deduped, seen = [], set()
+    for r in sorted(rows, key=lambda r: r["ts"]):
+        key = (r["dir"], r["flight"])
+        if key in seen:
             continue
-        seen.add((r["dir"], r["flight"]))
+        seen.add(key)
+        deduped.append(r)
+
+    past_reach = WINDOW_PAST_SPLIT if window == "split" else WINDOW_PAST
+    rows = [r for r in deduped
+            if now - past_reach <= r["ts"] <= now + WINDOW_FUTURE]
+    if window == "split":
+        past = [r for r in rows if r["ts"] < now][-limit:]
+        future = [r for r in rows if r["ts"] >= now][:limit]
+        return past + future
+    return rows[:limit]
+
+
+def norm_callsign(cs):
+    return "".join(str(cs).split()).upper()
+
+
+def get_positions(args, airport):
+    """callsign -> (dx_nm, dy_nm) east/north of the airport, from the
+    first ADS-B source that answers. {} when disabled or unavailable."""
+    if args.no_adsb:
+        return {}
+    coords = AIRPORT_COORDS.get(airport.upper())
+    if not coords:
+        return {}
+    lat0, lon0 = coords
+    radius = min(max(args.adsb_radius, 10), 250)
+    bases = [u.strip().rstrip("/") for u in args.adsb_urls.split(",") if u.strip()]
+    for base in bases:
+        try:
+            data = http_get_json(f"{base}/point/{lat0}/{lon0}/{radius}")
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            print(f"adsb source failed, trying next: {base}: {exc}")
+            continue
+        out = {}
+        for a in data.get("ac") or []:
+            cs = norm_callsign(a.get("flight") or "")
+            lat, lon = a.get("lat"), a.get("lon")
+            if not cs or lat is None or lon is None:
+                continue
+            dy = (lat - lat0) * 60.0
+            dx = (lon - lon0) * 60.0 * math.cos(math.radians(lat0))
+            out[cs] = (round(dx), round(dy))
+        return out
+    return {}
+
+
+def format_lines(rows, positions):
+    lines = []
+    for r in rows:
+        pos = (positions.get(norm_callsign(r.get("callsign") or ""))
+               or positions.get(norm_callsign(r.get("flight") or "")))
+        dx, dy = (str(pos[0]), str(pos[1])) if pos else ("", "")
         local = r["ts"].astimezone()  # server's local time zone
         lines.append("|".join((
             r["dir"],
@@ -208,13 +304,10 @@ def finish_rows(rows, limit):
             str(r["actype"]).upper()[:4],
             str(r["runway"]).upper()[:3],
             str(r["airport"]).upper()[:4],
+            dx,
+            dy,
         )))
-        if len(lines) >= limit:
-            break
     return lines
-
-
-BACKENDS = {"aeroapi": rows_aeroapi, "aviationstack": rows_aviationstack}
 
 
 # --------------------------------------------------------------- server ---
@@ -238,9 +331,11 @@ class FeedCache:
 
 
 class FeedHandler(BaseHTTPRequestHandler):
-    server_version = "PaperTerminalFeed/1.0"
+    server_version = "PaperTerminalFeed/2.0"
     args = None
-    cache = None
+    backends = None   # [(backend_name, api_key), ...] tried in order
+    cache = None      # raw flight rows per (airport, direction)
+    pos_cache = None  # ADS-B positions per airport, short TTL
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -252,6 +347,8 @@ class FeedHandler(BaseHTTPRequestHandler):
         airport = (qs.get("airport", [self.args.default_airport])[0] or "").upper()
         direction = qs.get("dir", ["arr"])[0].lower()
         direction = direction if direction in ("arr", "dep", "all") else "arr"
+        window = qs.get("window", ["ahead"])[0].lower()
+        window = window if window in ("ahead", "split") else "ahead"
         try:
             limit = max(1, min(20, int(qs.get("limit", ["12"])[0])))
         except ValueError:
@@ -261,19 +358,34 @@ class FeedHandler(BaseHTTPRequestHandler):
             self.send_text(400, "#ERR bad airport code\n")
             return
 
+        # Raw rows are cached per (airport, direction); windowing and
+        # position enrichment happen per request so positions stay fresh.
         key = (airport, direction)
-        lines = self.cache.get(key)
-        if lines is None:
-            try:
-                lines = BACKENDS[self.args.backend](
-                    self.args.key, airport, direction, 20)
-                self.cache.put(key, lines)
-            except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
-                self.send_text(502, f"#ERR upstream: {exc}\n")
+        rows = self.cache.get(key)
+        if rows is None:
+            errors = []
+            for backend, bkey in self.backends:
+                try:
+                    rows = BACKENDS[backend](bkey, airport, direction)
+                    break
+                except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
+                    errors.append(f"{backend}: {exc}")
+                    print(f"backend failed, trying next: {backend}: {exc}")
+            if rows is None:
+                self.send_text(502, "#ERR upstream: " + "; ".join(errors) + "\n")
                 return
+            self.cache.put(key, rows)
 
-        header = f"#PAPERTERMINAL 2 OK {airport} {direction.upper()}\n"
-        self.send_text(200, header + "\n".join(lines[:limit]) + "\n")
+        selected = select_rows(rows, limit, window)
+
+        positions = self.pos_cache.get(airport)
+        if positions is None:
+            positions = get_positions(self.args, airport)
+            self.pos_cache.put(airport, positions)
+
+        header = (f"#PAPERTERMINAL 3 OK {airport} "
+                  f"{direction.upper()} {window.upper()}\n")
+        self.send_text(200, header + "\n".join(format_lines(selected, positions)) + "\n")
 
     def send_text(self, status, body):
         payload = body.encode("ascii", "replace")
@@ -291,19 +403,37 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--backend", required=True, choices=sorted(BACKENDS))
     ap.add_argument("--key", required=True, help="API key for the backend")
+    ap.add_argument("--backend2", choices=sorted(BACKENDS),
+                    help="fallback flight-data backend, used when the primary fails")
+    ap.add_argument("--key2", help="API key for --backend2")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8091)
     ap.add_argument("--cache", type=int, default=300,
                     help="seconds to cache upstream responses (default 300)")
     ap.add_argument("--default-airport", default="ZRH")
+    ap.add_argument("--adsb-urls",
+                    default="https://api.adsb.lol/v2,https://opendata.adsb.fi/api/v2",
+                    help="comma-separated ADS-B API bases, tried in order")
+    ap.add_argument("--adsb-radius", type=int, default=100,
+                    help="ADS-B search radius around the airport in nm (max 250)")
+    ap.add_argument("--no-adsb", action="store_true",
+                    help="disable live position lookups entirely")
     args = ap.parse_args()
 
+    if args.backend2 and not args.key2:
+        ap.error("--backend2 requires --key2")
+
     FeedHandler.args = args
+    FeedHandler.backends = [(args.backend, args.key)] + (
+        [(args.backend2, args.key2)] if args.backend2 else [])
     FeedHandler.cache = FeedCache(max(60, args.cache))
+    FeedHandler.pos_cache = FeedCache(30)  # positions age fast
 
     server = ThreadingHTTPServer((args.host, args.port), FeedHandler)
+    backends = "+".join(b for b, _ in FeedHandler.backends)
     print(f"PaperTerminal feed proxy on http://{args.host}:{args.port}/feed "
-          f"(backend={args.backend}, cache={args.cache}s)")
+          f"(backends={backends}, cache={args.cache}s, "
+          f"adsb={'off' if args.no_adsb else args.adsb_urls})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

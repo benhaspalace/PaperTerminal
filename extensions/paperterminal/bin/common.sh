@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="2.0.0"
+PT_VERSION="2.1.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -63,36 +63,52 @@ load_conf() {
     [ -f "$PT_CONF" ] || save_conf_defaults
     AIRPORT="$(cfg AIRPORT)";   [ -n "$AIRPORT" ]  || AIRPORT="ZRH"
     FEED_URL="$(cfg FEED_URL)"; [ -n "$FEED_URL" ] || FEED_URL="http://192.168.0.10:8091/feed"
+    FEED_URL2="$(cfg FEED_URL2)"
+    FEED_URL3="$(cfg FEED_URL3)"
     ROWS="$(cfg ROWS)"
     case "$ROWS" in ''|*[!0-9]*) ROWS=12;; esac
     [ "$ROWS" -gt 14 ] && ROWS=14
     [ "$ROWS" -lt 1 ]  && ROWS=1
     REFRESH="$(cfg REFRESH)"
     case "$REFRESH" in ''|*[!0-9]*) REFRESH=0;; esac
+    RANGE="$(cfg RANGE)"
+    case "$RANGE" in ''|*[!0-9]*) RANGE=32;; esac
+    [ "$RANGE" -gt 200 ] && RANGE=200
+    [ "$RANGE" -lt 8 ]   && RANGE=8
 }
 
 save_conf() {
     cat > "$PT_CONF" <<EOF
 # PaperTerminal settings - safe to edit over USB.
-# AIRPORT : default airport code (IATA like ZRH; ICAO also fine for AeroAPI)
-# FEED_URL: your feed endpoint (see server/feed_proxy.py in the repo).
-#           https:// works via the bundled lib/curl and is verified with
-#           lib/cacert.pem; plain http:// works even without lib/
-#           (busybox wget fallback).
-# ROWS    : flights per board, 1..14
-# REFRESH : auto-redraw interval in seconds, 0 = draw once
+# AIRPORT  : default airport code (IATA like ZRH; ICAO also fine for AeroAPI)
+# FEED_URL : your feed endpoint (see server/feed_proxy.py in the repo).
+#            https:// works via the bundled lib/curl and is verified with
+#            lib/cacert.pem; plain http:// works even without lib/
+#            (busybox wget fallback).
+# FEED_URL2/FEED_URL3 : optional backup feeds, tried in order when the
+#            previous one fails (leave empty if unused)
+# ROWS     : flights per board, 1..14; also the per-side count for the
+#            live traffic map (ROWS before + ROWS after now)
+# REFRESH  : auto-redraw interval in seconds, 0 = draw once
+# RANGE    : live traffic map radius in nautical miles, 8..200
 AIRPORT=$AIRPORT
 FEED_URL=$FEED_URL
+FEED_URL2=$FEED_URL2
+FEED_URL3=$FEED_URL3
 ROWS=$ROWS
 REFRESH=$REFRESH
+RANGE=$RANGE
 EOF
 }
 
 save_conf_defaults() {
     AIRPORT="ZRH"
     FEED_URL="http://192.168.0.10:8091/feed"
+    FEED_URL2=""
+    FEED_URL3=""
     ROWS=12
     REFRESH=0
+    RANGE=32
     save_conf
 }
 
@@ -150,4 +166,33 @@ pt_fetch() {
     done
     wait "$wpid" 2>/dev/null
     [ -s "$2" ]
+}
+
+# pt_fetch_feed <query-string> <outfile> - failover fetch: try FEED_URL,
+# FEED_URL2, FEED_URL3 in order until one returns valid flight lines.
+# Sets PT_FEED_USED to the index of the feed that answered (1..3).
+pt_fetch_feed() {
+    PT_FEED_USED=0
+    _idx=0
+    for _u in "$FEED_URL" "$FEED_URL2" "$FEED_URL3"; do
+        _idx=$(( _idx + 1 ))
+        [ -n "$_u" ] || continue
+        rm -f "$2"
+        if pt_fetch "$_u?$1" "$2" && [ -s "$2" ] \
+           && grep -q '^[AD]|.*|.*|.*|.*|.*|' "$2"; then
+            PT_FEED_USED=$_idx
+            return 0
+        fi
+        log "feed $_idx failed: $_u?$1"
+    done
+    return 1
+}
+
+# Number of configured feed URLs (for messages).
+pt_feed_count() {
+    _n=0
+    for _u in "$FEED_URL" "$FEED_URL2" "$FEED_URL3"; do
+        [ -n "$_u" ] && _n=$(( _n + 1 ))
+    done
+    echo $_n
 }

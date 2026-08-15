@@ -22,16 +22,8 @@ esac
 
 get_feed() {
     FEED_OK=0
-    url="$FEED_URL?airport=$AIRPORT&dir=$DIR&limit=$ROWS"
-    rm -f "$PT_TMP"
-    if ! pt_fetch "$url" "$PT_TMP"; then
-        log "feed fetch failed: $url"
-        return 1
-    fi
-    if [ -s "$PT_TMP" ] && grep -q '^[AD]|.*|.*|.*|.*|.*|' "$PT_TMP"; then
+    if pt_fetch_feed "airport=$AIRPORT&dir=$DIR&limit=$ROWS" "$PT_TMP"; then
         FEED_OK=1
-    else
-        log "feed returned no valid flight lines: $url"
     fi
 }
 
@@ -80,22 +72,30 @@ draw_board() {
 
     [ $count -eq 0 ] && say 1 10 "NO FLIGHTS REPORTED FOR $AIRPORT RIGHT NOW"
 
-    draw_footer "LIVE $AIRPORT"
+    SRC="LIVE $AIRPORT"
+    [ "$PT_FEED_USED" -gt 1 ] && SRC="LIVE $AIRPORT (BACKUP FEED $PT_FEED_USED)"
+    draw_footer "$SRC"
 }
 
 draw_error() {
     draw_header
-    say 1 6  "  FEED UNREACHABLE OR INVALID"
+    NFEEDS="$(pt_feed_count)"
+    if [ "$NFEEDS" -gt 1 ]; then
+        say 1 6 "  ALL $NFEEDS CONFIGURED FEEDS FAILED"
+    else
+        say 1 6 "  FEED UNREACHABLE OR INVALID"
+    fi
     say 1 8  "  URL: $(printf '%.41s' "$FEED_URL")"
     say 1 10 "  CHECK:"
     say 1 11 "  - WI-FI IS CONNECTED (3G ONLY REACHES"
     say 1 12 "    AMAZON, IT CANNOT REACH YOUR FEED)"
     say 1 13 "  - YOUR FEED PROXY IS RUNNING"
     say 1 14 "    (server/feed_proxy.py IN THE REPO)"
-    say 1 15 "  - FEED_URL IN paperterminal.conf"
-    say 1 17 "  RUN KUAL > NETWORK SELF-TEST (HTTPS)"
-    say 1 18 "  TO PINPOINT THE FAILING STEP."
-    say 1 20 "  DETAILS: paperterminal.log"
+    say 1 15 "  - FEED_URL / FEED_URL2 / FEED_URL3 IN"
+    say 1 16 "    paperterminal.conf"
+    say 1 18 "  RUN KUAL > NETWORK SELF-TEST (HTTPS)"
+    say 1 19 "  TO PINPOINT THE FAILING STEP."
+    say 1 21 "  DETAILS: paperterminal.log"
     draw_footer "FEED DOWN"
 }
 

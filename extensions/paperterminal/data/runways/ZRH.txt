@@ -1,0 +1,18 @@
+                                          N ^
+
+      16
+      |                 14
+      |                  \
+      |                   \
+      |                    \
+ 10 ==|=====================\========== 28
+      |                      \
+      |                       \
+      |                        \
+      |                         \
+      34                         32
+
+ ZURICH KLOTEN - 3 RUNWAYS
+   16/34  3700M  N-S    (MAIN LANDING)
+   14/32  3300M  NW-SE  (LANDING/TAKEOFF)
+   10/28  2500M  E-W    (MAIN TAKEOFF)

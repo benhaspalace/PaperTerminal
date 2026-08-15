@@ -1,0 +1,17 @@
+                                          N ^
+
+    13L
+      \
+       \               13R
+        \                \
+         \                \
+          \                \
+           \                \
+            \                \
+             31R              \
+                               \
+                                31L
+
+ BUDAPEST LISZT FERENC - 2 PARALLEL RUNWAYS
+   13L/31R  3010M  NW-SE
+   13R/31L  3707M  NW-SE
