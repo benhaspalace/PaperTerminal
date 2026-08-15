@@ -75,6 +75,7 @@ draw_board() {
 
     SRC="LIVE $AIRPORT"
     [ "$PT_SRC_USED" -gt 1 ] && SRC="LIVE $AIRPORT (BACKUP SOURCE $PT_SRC_USED)"
+    [ "$PT_SRC_STALE" -gt 0 ] && SRC="$AIRPORT - DATA ${PT_SRC_STALE}MIN OLD"
     draw_footer "$SRC"
 }
 

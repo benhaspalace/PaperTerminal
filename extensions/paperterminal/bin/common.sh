@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="3.1.0"
+PT_VERSION="3.2.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -78,6 +78,10 @@ load_conf() {
     [ "$RANGE" -lt 8 ]   && RANGE=8
     CACHE="$(cfg CACHE)"
     case "$CACHE" in ''|*[!0-9]*) CACHE=300;; esac
+    AERO_DAY="$(cfg AERO_DAY)"
+    case "$AERO_DAY" in ''|*[!0-9]*) AERO_DAY=6;; esac
+    AERO_MONTH="$(cfg AERO_MONTH)"
+    case "$AERO_MONTH" in ''|*[!0-9]*) AERO_MONTH=190;; esac
     KEY_MENU="$(cfg KEY_MENU)"; case "$KEY_MENU" in ''|*[!0-9]*) KEY_MENU=139;; esac
     KEY_BACK="$(cfg KEY_BACK)"; case "$KEY_BACK" in ''|*[!0-9]*) KEY_BACK=158;; esac
     KEY_HOME="$(cfg KEY_HOME)"; case "$KEY_HOME" in ''|*[!0-9]*) KEY_HOME=102;; esac
@@ -102,6 +106,11 @@ save_conf() {
 # REFRESH  : auto-redraw interval in seconds, 0 = draw once
 # RANGE    : live traffic map radius in nautical miles, 8..200
 # CACHE    : seconds to reuse fetched data (protects your API quota)
+# AERO_DAY / AERO_MONTH : max AeroAPI queries per day / calendar month.
+#            The free Personal tier is a ~USD 5 monthly credit at roughly
+#            USD 0.025 per airport-flights query (~200/month); defaults
+#            6/day and 190/month keep a safety margin. When the budget is
+#            spent, backup sources or clearly-marked stale data are shown.
 # KEY_*    : keycodes for on-device navigation (see the key test screen)
 AIRPORT=$AIRPORT
 SOURCE1=$SOURCE1
@@ -111,6 +120,8 @@ ROWS=$ROWS
 REFRESH=$REFRESH
 RANGE=$RANGE
 CACHE=$CACHE
+AERO_DAY=$AERO_DAY
+AERO_MONTH=$AERO_MONTH
 KEY_MENU=$KEY_MENU
 KEY_BACK=$KEY_BACK
 KEY_HOME=$KEY_HOME
@@ -130,6 +141,8 @@ save_conf_defaults() {
     REFRESH=0
     RANGE=32
     CACHE=300
+    AERO_DAY=6
+    AERO_MONTH=190
     KEY_MENU=139
     KEY_BACK=158
     KEY_HOME=102

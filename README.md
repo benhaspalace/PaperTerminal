@@ -152,6 +152,8 @@ ROWS=12            # flights per board; per-side count on the map
 REFRESH=0          # standalone auto-redraw seconds (0 = draw once)
 RANGE=32           # live traffic map radius in nautical miles
 CACHE=300          # seconds to reuse fetched data (protects API quota)
+AERO_DAY=6         # AeroAPI budget: max queries per day...
+AERO_MONTH=190     # ...and per calendar month (free-tier fit)
 KEY_MENU=139       # navigation keycodes - see the key test screen
 KEY_BACK=158
 KEY_HOME=102
@@ -177,7 +179,10 @@ scanner (no key-order or formatting assumptions):
 - **AeroAPI** (`SOURCE1=aeroapi,KEY`): arrivals, scheduled arrivals,
   departures and scheduled departures per airport, with **actual runway
   used** on flights that have landed/departed and ICAO aircraft types.
-  Requires the bundled curl (HTTPS + API-key header).
+  Requires the bundled curl (HTTPS + API-key header). One combined
+  `/flights` query (billed once) carries all four groups, and its raw
+  JSON is cached, so switching between the arrivals, departures and
+  combined boards costs nothing extra.
 - **aviationstack** (`SOURCE2=aviationstack,KEY`): full airline names and
   IATA aircraft types, no runway data. Works over plain HTTP, so it even
   functions without `lib/curl`.
@@ -190,6 +195,20 @@ Sources are tried in order until one delivers; the board footer notes
 when a backup source answered (`BACKUP SOURCE 2`). Responses are cached
 in `/tmp` for `CACHE` seconds, so redraws don't burn API quota. Airline
 codes are mapped to display names via `data/airlines.txt`.
+
+### Staying inside the AeroAPI free tier
+
+FlightAware's Personal tier is a monthly usage credit (about USD 5, at
+roughly USD 0.025 per airport-flights query — around 200 queries a
+month). PaperTerminal enforces that **client-side**: a persistent
+counter (`aeroapi.usage`) caps AeroAPI calls at `AERO_DAY` per day
+(default 6) and `AERO_MONTH` per calendar month (default 190, leaving a
+margin), covering board fetches and airport lookups alike. When the
+budget is spent, the next source takes over; if none is configured, the
+last data is shown with an honest footer like `ZRH - DATA 25MIN OLD`
+instead of an empty board. Current usage is shown on the help screen and
+in the network self-test. If FlightAware changes their pricing, adjust
+the two caps in the config.
 
 ## Bundled HTTPS stack
 

@@ -62,7 +62,9 @@ if [ "$NOK" -eq 0 ]; then
     say 1 $row "  SOURCE1= IN paperterminal.conf"
     row=$(( row + 1 ))
 fi
-row=$(( row + 1 ))
+aero_load_usage
+say 1 $row "  AEROAPI BUDGET: $UDC/$AERO_DAY TODAY, $UMC/$AERO_MONTH MONTH"
+row=$(( row + 2 ))
 
 say 1 $row "TEST 4: ADS-B POSITIONS (TRAFFIC MAP)"
 row=$(( row + 1 ))

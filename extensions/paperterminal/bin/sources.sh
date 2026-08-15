@@ -105,6 +105,43 @@ function tmin(t,   y, m, d, h, mi, a, y2, m2, j) {
 }
 '
 
+# ------------------------------------------------------- aeroapi budget ----
+# FlightAware's free Personal tier is a monthly usage credit (about $5,
+# roughly 200 airport-flights queries at ~$0.025 each). These counters
+# persist across reboots and gate every AeroAPI call; when a cap is hit
+# the code fails over to the next source or serves stale cache instead.
+
+PT_AERO_USAGE="$PT_HOME/aeroapi.usage"
+
+aero_load_usage() {
+    AERO_MKEY="$(date +%Y-%m)"
+    AERO_DKEY="$(date +%Y-%m-%d)"
+    UMON=""; UMC=""; UDAY=""; UDC=""
+    if [ -f "$PT_AERO_USAGE" ]; then
+        read -r UMON UMC UDAY UDC < "$PT_AERO_USAGE" 2>/dev/null
+    fi
+    [ "$UMON" = "$AERO_MKEY" ] || UMC=0
+    [ "$UDAY" = "$AERO_DKEY" ] || UDC=0
+    case "$UMC" in ''|*[!0-9]*) UMC=0;; esac
+    case "$UDC" in ''|*[!0-9]*) UDC=0;; esac
+}
+
+aero_allow() {
+    aero_load_usage
+    if [ "$UDC" -ge "$AERO_DAY" ] || [ "$UMC" -ge "$AERO_MONTH" ]; then
+        log "aeroapi budget reached (day $UDC/$AERO_DAY, month $UMC/$AERO_MONTH)"
+        return 1
+    fi
+    return 0
+}
+
+aero_count() {
+    aero_load_usage
+    UMC=$(( UMC + 1 ))
+    UDC=$(( UDC + 1 ))
+    echo "$AERO_MKEY $UMC $AERO_DKEY $UDC" > "$PT_AERO_USAGE" 2>/dev/null
+}
+
 # Object scanner main: feeds every depth-2 object (array members of the
 # root object) to emit().
 PT_AWK_SCAN='
@@ -126,20 +163,55 @@ END {
 }
 '
 
+# Group-aware scanner for AeroAPI's combined /flights response: the root
+# object holds four arrays (arrivals, scheduled_arrivals, departures,
+# scheduled_departures); the current array key is tracked so one billed
+# query serves every board direction.
+PT_AWK_SCAN_GROUPED='
+{ buf = buf $0 }
+END {
+    n = length(buf); dep = 0; ins = 0; esc = 0; st = 0; grp = ""; s = ""
+    for (i = 1; i <= n; i++) {
+        c = substr(buf, i, 1)
+        if (ins) {
+            if (esc) esc = 0
+            else if (c == "\\") esc = 1
+            else if (c == "\"") { ins = 0; if (dep == 1) lastkey = s }
+            else if (dep == 1) s = s c
+            continue
+        }
+        if (c == "\"") { ins = 1; s = ""; continue }
+        if (c == "[") { if (dep == 1) grp = lastkey; continue }
+        if (c == "{") { dep++; if (dep == 2) st = i; continue }
+        if (c == "}") { if (dep == 2 && st) emit(substr(buf, st, i - st + 1), grp); dep--; continue }
+    }
+}
+'
+
 # Raw parser output: SORTKEY|DIR|FLIGHT|AIRLINE|TYPE|RWY|APT|CALLSIGN
+# DIRQ filters: arr -> arrivals only, dep -> departures only, all -> both.
 PT_AWK_AEROAPI='
-function emit(o,   t, mn, fl, cs, al, ty, rw, ob, ap) {
-    t = jstr(o, K1); if (t == "") t = jstr(o, K2); if (t == "") t = jstr(o, K3)
+function emit(o, g,   tag, k1, k2, k3, rk, okey, t, mn, fl, cs, al, ty, rw, ob, ap) {
+    if (g == "arrivals" || g == "scheduled_arrivals") {
+        if (DIRQ == "dep") return
+        tag = "A"; k1 = "actual_on"; k2 = "estimated_on"; k3 = "scheduled_on"
+        rk = "actual_runway_on"; okey = "origin"
+    } else if (g == "departures" || g == "scheduled_departures") {
+        if (DIRQ == "arr") return
+        tag = "D"; k1 = "actual_off"; k2 = "estimated_off"; k3 = "scheduled_off"
+        rk = "actual_runway_off"; okey = "destination"
+    } else return
+    t = jstr(o, k1); if (t == "") t = jstr(o, k2); if (t == "") t = jstr(o, k3)
     mn = tmin(t); if (mn < 0) return
     fl = jstr(o, "ident_iata"); if (fl == "") fl = jstr(o, "ident"); if (fl == "") return
     cs = jstr(o, "ident")
     al = jstr(o, "operator_iata"); if (al == "") al = jstr(o, "operator")
     if (al == "") al = substr(fl, 1, 2)
     ty = jstr(o, "aircraft_type"); if (ty == "") ty = "-"
-    rw = jstr(o, RK); if (rw == "") rw = "-"
-    ob = jobj(o, OKEY)
+    rw = jstr(o, rk); if (rw == "") rw = "-"
+    ob = jobj(o, okey)
     ap = jstr(ob, "code_iata"); if (ap == "") ap = jstr(ob, "code"); if (ap == "") ap = "-"
-    printf "%09d|%s|%s|%s|%s|%s|%s|%s\n", mn, TAG, fl, al, ty, rw, ap, cs
+    printf "%09d|%s|%s|%s|%s|%s|%s|%s\n", mn, tag, fl, al, ty, rw, ap, cs
 }
 '
 
@@ -214,31 +286,40 @@ src_finish_raw() { # RAWFILE WINDOW LIMIT OUT
 # ------------------------------------------------------------ sources ------
 
 src_aeroapi() { # KEY DIR WINDOW LIMIT OUT
-    CURLBIN="$(pt_curl_bin)" || { log "aeroapi needs lib/curl"; return 1; }
-    case "$2" in
-        arr) GROUPS="arrivals scheduled_arrivals" ;;
-        dep) GROUPS="departures scheduled_departures" ;;
-        *)   GROUPS="arrivals scheduled_arrivals departures scheduled_departures" ;;
-    esac
-    RAW="$PT_TMP.raw"; : > "$RAW"
-    for g in $GROUPS; do
-        case "$g" in
-            arrivals|scheduled_arrivals)
-                TAG=A; K1=actual_on; K2=estimated_on; K3=scheduled_on
-                RK=actual_runway_on; OKEY=origin ;;
-            *)
-                TAG=D; K1=actual_off; K2=estimated_off; K3=scheduled_off
-                RK=actual_runway_off; OKEY=destination ;;
-        esac
-        "$CURLBIN" -sS --connect-timeout 15 -m 40 --cacert "$PT_CACERT" \
-            -H "x-apikey: $1" -A "PaperTerminal/$PT_VERSION" \
-            -o "$PT_TMP.json" \
-            "$AEROAPI_BASE/airports/$AIRPORT/flights/$g?max_pages=1" \
-            2>/dev/null || continue
-        awk -v TAG=$TAG -v K1=$K1 -v K2=$K2 -v K3=$K3 -v RK=$RK -v OKEY=$OKEY \
-            "$PT_AWK_JSON $PT_AWK_SCAN $PT_AWK_AEROAPI" "$PT_TMP.json" >> "$RAW"
-    done
-    rm -f "$PT_TMP.json"
+    # One combined /flights query is billed once and carries all four
+    # groups, so its raw JSON is cached per airport and reused for every
+    # board direction. When the budget is spent or the network is down,
+    # a stale copy is served instead (PT_SRC_STALE = age in minutes).
+    JC="$PT_CACHE_DIR/$AIRPORT.aeroapi.json"
+    now="$(date +%s)"
+    jts="$(cat "$JC.t" 2>/dev/null)"
+    case "$jts" in ''|*[!0-9]*) jts=0 ;; esac
+    age=$(( now - jts ))
+
+    if [ ! -s "$JC" ] || [ $age -ge "$CACHE" ]; then
+        if aero_allow; then
+            CURLBIN="$(pt_curl_bin)" || { log "aeroapi needs lib/curl"; return 1; }
+            if "$CURLBIN" -sS --connect-timeout 15 -m 40 --cacert "$PT_CACERT" \
+                -H "x-apikey: $1" -A "PaperTerminal/$PT_VERSION" \
+                -o "$PT_TMP.json" \
+                "$AEROAPI_BASE/airports/$AIRPORT/flights?max_pages=1" \
+                2>/dev/null && grep -q '"ident' "$PT_TMP.json"; then
+                aero_count
+                mv "$PT_TMP.json" "$JC"
+                echo "$now" > "$JC.t"
+                age=0
+            else
+                rm -f "$PT_TMP.json"
+                log "aeroapi fetch failed for $AIRPORT"
+            fi
+        fi
+    fi
+    [ -s "$JC" ] || return 1
+    [ $age -gt "$CACHE" ] && PT_SRC_STALE=$(( age / 60 ))
+
+    RAW="$PT_TMP.raw"
+    awk -v DIRQ="$2" \
+        "$PT_AWK_JSON $PT_AWK_SCAN_GROUPED $PT_AWK_AEROAPI" "$JC" > "$RAW"
     src_finish_raw "$RAW" "$3" "$4" "$5"
 }
 
@@ -277,32 +358,44 @@ src_try() { # IDX DIR WINDOW LIMIT OUT - run one configured source
 }
 
 # src_fetch DIR WINDOW LIMIT OUT - cached, failing over across sources.
-# Sets PT_SRC_USED (1..3, 0 = none worked).
+# Sets PT_SRC_USED (1..3, 0 = none worked) and PT_SRC_STALE (minutes, when
+# only outdated data could be served - better than an empty board).
 src_fetch() {
     PT_SRC_USED=0
+    PT_SRC_STALE=0
     mkdir -p "$PT_CACHE_DIR" 2>/dev/null
     CF="$PT_CACHE_DIR/$AIRPORT.$1.$2.$3"
-    if [ -f "$CF" ]; then
-        cts="$(sed -n 's/^#T //p' "$CF" | head -n 1)"
-        case "$cts" in ''|*[!0-9]*) cts=0 ;; esac
-        if [ $(( $(date +%s) - cts )) -lt "$CACHE" ]; then
-            grep -v '^#' "$CF" > "$4"
-            PT_SRC_USED="$(sed -n 's/^#S //p' "$CF" | head -n 1)"
-            case "$PT_SRC_USED" in ''|*[!0-9]*) PT_SRC_USED=1 ;; esac
-            [ -s "$4" ] && return 0
-        fi
+    cts="$(sed -n 's/^#T //p' "$CF" 2>/dev/null | head -n 1)"
+    case "$cts" in ''|*[!0-9]*) cts=0 ;; esac
+    cage=$(( $(date +%s) - cts ))
+    if [ -f "$CF" ] && [ $cage -lt "$CACHE" ]; then
+        grep -v '^#' "$CF" > "$4"
+        PT_SRC_USED="$(sed -n 's/^#S //p' "$CF" | head -n 1)"
+        case "$PT_SRC_USED" in ''|*[!0-9]*) PT_SRC_USED=1 ;; esac
+        [ -s "$4" ] && return 0
     fi
     i=0
     while [ $i -lt 3 ]; do
         i=$(( i + 1 ))
         if src_try $i "$1" "$2" "$3" "$4"; then
             PT_SRC_USED=$i
-            { echo "#T $(date +%s)"; echo "#S $i"; cat "$4"; } > "$CF" 2>/dev/null
+            if [ "$PT_SRC_STALE" -eq 0 ]; then
+                { echo "#T $(date +%s)"; echo "#S $i"; cat "$4"; } > "$CF" 2>/dev/null
+            fi
             return 0
         fi
         eval "spec=\$SOURCE$i"
         [ -n "$spec" ] && log "source $i (${spec%%,*}) failed for $AIRPORT/$1"
     done
+    # Every source failed: serve the expired line cache rather than nothing.
+    if [ -f "$CF" ] && grep -q '^[AD]|' "$CF"; then
+        grep -v '^#' "$CF" > "$4"
+        PT_SRC_USED="$(sed -n 's/^#S //p' "$CF" | head -n 1)"
+        case "$PT_SRC_USED" in ''|*[!0-9]*) PT_SRC_USED=1 ;; esac
+        PT_SRC_STALE=$(( cage / 60 ))
+        log "all sources failed - serving ${PT_SRC_STALE}min old cache"
+        return 0
+    fi
     return 1
 }
 
@@ -327,10 +420,12 @@ apt_lookup_api() {
         case "$spec" in aeroapi,*) key="${spec#aeroapi,}"; break ;; esac
     done
     [ -n "$key" ] || return 1
+    aero_allow || return 1
     "$CURLBIN" -sS --connect-timeout 15 -m 30 --cacert "$PT_CACERT" \
         -H "x-apikey: $key" -A "PaperTerminal/$PT_VERSION" \
         -o "$PT_TMP.apt" "$AEROAPI_BASE/airports/$1" 2>/dev/null || {
         rm -f "$PT_TMP.apt"; return 1; }
+    aero_count
     line="$(awk "$PT_AWK_JSON"'
         { buf = buf $0 }
         END {

@@ -64,6 +64,7 @@ draw_map() {
     say 1 36 "$LRULE"
     SRC="RANGE ${RANGE}NM"
     [ "$PT_SRC_USED" -gt 1 ] && SRC="RANGE ${RANGE}NM (BACKUP SOURCE $PT_SRC_USED)"
+    [ "$PT_SRC_STALE" -gt 0 ] && SRC="RANGE ${RANGE}NM - DATA ${PT_SRC_STALE}MIN OLD"
     say 1 37 "$SRC"
     say_r 37 "UPD $(date +%H:%M)"
 }

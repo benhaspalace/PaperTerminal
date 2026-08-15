@@ -2,6 +2,7 @@
 # PaperTerminal - help screen with current settings.
 
 . "$(dirname "$0")/common.sh"
+. "$(dirname "$0")/sources.sh"
 
 load_conf
 cls
@@ -34,6 +35,8 @@ say 1 7  "  ROWS: $ROWS  REFRESH: ${REFRESH}s  RANGE: ${RANGE}NM"
 say 1 8  "  SOURCE1 : $(mask_src "$SOURCE1")"
 say 1 9  "  SOURCE2 : $(mask_src "$SOURCE2")"
 say 1 10 "  SOURCE3 : $(mask_src "$SOURCE3")"
+aero_load_usage
+say 1 11 "  AEROAPI : $UDC/$AERO_DAY TODAY, $UMC/$AERO_MONTH THIS MONTH"
 say 1 12 "$LRULE"
 say 1 14 "SCREENS: ARRIVAL/DEPARTURE/COMBINED BOARDS,"
 say 1 15 "LIVE TRAFFIC MAP (ADS-B), RUNWAY DIAGRAMS."
