@@ -1,0 +1,95 @@
+name: HTTPS stack
+
+# Rebuilds the Kindle 3 static curl/OpenSSL bundle and the Mozilla CA file
+# from upstream sources, runs the qemu TLS smoke tests, and uploads the
+# result. Optionally commits the refreshed bundle back to the branch it
+# was run on. Trigger it manually from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      curl_version:
+        description: "curl version (x.y.z or 'latest')"
+        required: false
+        default: "latest"
+      openssl_version:
+        description: "OpenSSL version (x.y.z or 'latest')"
+        required: false
+        default: "latest"
+      commit:
+        description: "Commit refreshed lib/ back to this branch"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  extension-checks:
+    name: Extension script checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: POSIX syntax check all shell scripts
+        run: |
+          for f in extensions/paperterminal/bin/*.sh build/*.sh; do
+            sh -n "$f" && echo "OK: $f"
+          done
+      - name: Validate menu.json and config.xml
+        run: |
+          python3 -c "import json; json.load(open('extensions/paperterminal/menu.json'))"
+          python3 -c "import xml.dom.minidom as m; m.parse('extensions/paperterminal/config.xml')"
+      - name: Compile feed proxy
+        run: python3 -m py_compile server/feed_proxy.py
+
+  build-https-stack:
+    name: Build and test static curl/OpenSSL for ARMv5
+    runs-on: ubuntu-latest
+    needs: extension-checks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install qemu for ARM smoke tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+
+      - name: Build, verify checksums, run TLS smoke tests
+        env:
+          CURL_VERSION: ${{ inputs.curl_version }}
+          OPENSSL_VERSION: ${{ inputs.openssl_version }}
+        run: |
+          # Non-default versions have no local pins; publisher-hosted
+          # .sha256 files for openssl and cacert.pem are still enforced.
+          if [ "$CURL_VERSION" != "8.21.0" ]; then export PIN_CURL_SHA256=""; fi
+          sh build/build-https-stack.sh
+
+      - name: Show result
+        run: |
+          cat extensions/paperterminal/lib/SHA256SUMS
+          file extensions/paperterminal/lib/curl extensions/paperterminal/lib/openssl
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperterminal-https-stack
+          path: |
+            extensions/paperterminal/lib/curl
+            extensions/paperterminal/lib/openssl
+            extensions/paperterminal/lib/cacert.pem
+            extensions/paperterminal/lib/BUILDINFO.txt
+            extensions/paperterminal/lib/SHA256SUMS
+
+      - name: Commit refreshed bundle
+        if: ${{ inputs.commit }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add extensions/paperterminal/lib/
+          if git diff --cached --quiet; then
+            echo "Bundle unchanged - nothing to commit."
+          else
+            git commit -m "Refresh bundled HTTPS stack (curl ${{ inputs.curl_version }}, openssl ${{ inputs.openssl_version }})"
+            git push
+          fi

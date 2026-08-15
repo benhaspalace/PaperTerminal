@@ -57,20 +57,7 @@ get_feed() {
     url="$FEED_URL?airport=$AIRPORT&dir=$DIR&limit=$ROWS"
     rm -f "$PT_TMP"
 
-    # The K3 busybox wget has no timeout option, so babysit it ourselves
-    # to keep a dead network from freezing the board for minutes.
-    wget -q -O "$PT_TMP" "$url" 2>/dev/null &
-    wpid=$!
-    n=0
-    while kill -0 "$wpid" 2>/dev/null; do
-        n=$(( n + 1 ))
-        if [ $n -gt 25 ]; then
-            kill "$wpid" 2>/dev/null
-            break
-        fi
-        sleep 1
-    done
-    wait "$wpid" 2>/dev/null
+    pt_fetch "$url" "$PT_TMP"
 
     if [ -s "$PT_TMP" ] && grep -q '^[AD]|.*|.*|.*|.*|.*|' "$PT_TMP"; then
         SOURCE="LIVE $AIRPORT"

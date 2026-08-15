@@ -23,9 +23,10 @@ Each row shows the **time, airline, flight number, origin/destination
 airport, aircraft type, runway used**, and an arrival/departure
 **pictogram** (`\v` = arriving from, `/^` = departing to).
 
-Everything on the device is plain POSIX shell drawn with `eips` — no Python,
-no Java, no extra binaries — so it runs comfortably on the K3's 256 MB of
-RAM and ancient busybox.
+Everything on the device is plain POSIX shell drawn with `eips`, plus a
+bundled, statically linked **modern curl + OpenSSL + Mozilla CA bundle**
+(`lib/`) so the Kindle can speak today's HTTPS — the K3's stock
+curl/openssl/wget are 2010-era and deliberately never used for TLS.
 
 ## Features
 
@@ -36,8 +37,13 @@ RAM and ancient busybox.
   editing a config file over USB
 - Demo mode that works fully offline (sample flights with times generated
   around the current clock), enabled out of the box
-- Live mode that fetches real flights over plain HTTP from a tiny feed
-  proxy (`server/feed_proxy.py`) with real runway data via FlightAware
+- Live mode that fetches real flights from a tiny feed proxy
+  (`server/feed_proxy.py`) with real runway data via FlightAware
+- Bundled HTTPS stack: static curl 8.21 with OpenSSL 3.5 LTS inside and an
+  up-to-date Mozilla CA root bundle, built for the K3's ARMv6 CPU and 2.6
+  kernel — `https://` feed URLs work, verified against real certificates,
+  so the proxy can live anywhere on the internet, not just your LAN
+- On-device network self-test screen (checks the TLS stack, then the feed)
 - Optional auto-refresh in live mode
 - Graceful fallback: if the live feed is unreachable, the board still draws
   with demo data and says `FEED DOWN - DEMO`
@@ -49,8 +55,8 @@ RAM and ancient busybox.
 - **KUAL** installed. On the K3 that is the *KUAL Kindlet* (`KUAL-*.azw2`
   placed in the `documents` folder), which also requires the kindlet
   jailbreak key from the same MobileRead resources
-- For live mode only: Wi-Fi, plus any always-on machine on your LAN
-  (laptop, Raspberry Pi, NAS) running Python 3 for the feed proxy
+- For live mode only: Wi-Fi, plus any machine running Python 3 for the
+  feed proxy — on your LAN or anywhere on the internet behind HTTPS
 
 > **Note on 3G:** the K3's free 3G (Whispernet) only reaches Amazon
 > services — it cannot reach your LAN or arbitrary HTTP servers. Live mode
@@ -101,11 +107,42 @@ REFRESH=0        # live mode: redraw every N seconds (0 = draw once)
 
 This is also how you set an airport that isn't in the preset menu.
 
+## Bundled HTTPS stack
+
+`extensions/paperterminal/lib/` ships three files that replace the
+Kindle's stock TLS tooling:
+
+| File         | What it is |
+|--------------|------------|
+| `curl`       | curl 8.21.0, statically linked (musl), OpenSSL 3.5.7 LTS inside, http/https only |
+| `openssl`    | OpenSSL 3.5.7 CLI (`s_client` etc.), statically linked, for debugging |
+| `cacert.pem` | Mozilla CA root bundle from <https://curl.se/ca/cacert.pem> |
+
+All fetches go through the bundled curl with `--cacert lib/cacert.pem`, so
+certificates are properly verified against current roots. The binaries
+target ARMv5 soft-float musl, so they run on the K3's ARMv6 CPU and 2.6.26
+kernel with no firmware dependencies (OpenSSL is built with
+`--with-rand-seed=devrandom` because that kernel predates `getrandom()`).
+If `lib/curl` is missing or not runnable, the extension quietly falls back
+to busybox wget, which limits `FEED_URL` to plain `http://`.
+
+Provenance: `lib/BUILDINFO.txt` records source versions and checksums,
+`lib/SHA256SUMS` the shipped binaries. Rebuild reproducibly with
+`build/build-https-stack.sh` on any Linux host, or run the **HTTPS stack**
+GitHub Actions workflow, which rebuilds from upstream sources (pinned or
+`latest`), verifies publisher checksums, runs TLS handshake smoke tests
+under qemu-arm, uploads the bundle as an artifact, and can commit the
+refreshed bundle back to the branch. Use the same workflow to refresh
+`cacert.pem` periodically.
+
+Use the KUAL menu's **Network self-test (HTTPS)** to verify the stack on
+the device: it checks `lib/curl` runs, fetches an HTTPS page with
+certificate verification, then tests your configured feed.
+
 ## Live data
 
-The Kindle 3's TLS stack is too old for today's HTTPS-only flight APIs, so
-live mode uses a minimal plain-HTTP feed served by `server/feed_proxy.py`
-on your LAN. The proxy needs only the Python 3 standard library:
+Live mode uses a minimal text feed served by `server/feed_proxy.py`. The
+proxy needs only the Python 3 standard library:
 
 ```sh
 # With FlightAware AeroAPI (has real runway + aircraft type data;
@@ -121,6 +158,13 @@ Then set on the Kindle:
 ```
 MODE=live
 FEED_URL=http://<proxy-machine-LAN-IP>:8091/feed
+```
+
+or, with the proxy hosted anywhere behind a TLS reverse proxy or tunnel
+(the bundled curl verifies the certificate against `lib/cacert.pem`):
+
+```
+FEED_URL=https://your-host.example.com/feed
 ```
 
 Upstream responses are cached (default 5 minutes) so refreshing the board
@@ -153,13 +197,20 @@ ignored by the device.
 extensions/paperterminal/   the KUAL extension (copy this to the Kindle)
   config.xml                KUAL extension descriptor
   menu.json                 KUAL menu entries
-  bin/common.sh             shared helpers (config, eips drawing)
+  bin/common.sh             shared helpers (config, eips drawing, fetching)
   bin/board.sh              fetches data and draws the board
   bin/set_airport.sh        writes the default airport
   bin/set_mode.sh           demo/live toggle
+  bin/nettest.sh            on-device network / HTTPS self-test
   bin/help.sh               on-device help screen
   data/demo_*.txt           offline sample flights
-server/feed_proxy.py        optional LAN proxy for live data
+  lib/curl                  static modern curl + OpenSSL for the K3
+  lib/openssl               static OpenSSL CLI for debugging
+  lib/cacert.pem            Mozilla CA root bundle
+  lib/BUILDINFO.txt         provenance: versions, checksums, target
+build/build-https-stack.sh  reproducible cross-build of lib/ from source
+.github/workflows/          CI: rebuild + test + refresh the HTTPS stack
+server/feed_proxy.py        feed proxy for live data (LAN or internet)
 ```
 
 ## Troubleshooting
@@ -167,9 +218,14 @@ server/feed_proxy.py        optional LAN proxy for live data
 - **Board flashes and disappears** — you pressed a key; the Kindle UI
   repaints over the board. Just relaunch it from KUAL.
 - **`FEED DOWN - DEMO` in the footer** — the Kindle couldn't fetch
-  `FEED_URL`. Check Wi-Fi is on, the proxy is running, and the IP/port are
-  right. The last error is written to
+  `FEED_URL`. Run the **Network self-test (HTTPS)** from the KUAL menu:
+  it tells you whether the TLS stack, the internet connection, or the feed
+  itself is the problem. The last error is written to
   `extensions/paperterminal/paperterminal.log`.
+- **`https://` feed fails but http works** — make sure the `lib/` folder
+  was copied to the Kindle along with the rest of the extension. Some
+  firmwares mount `/mnt/us` noexec; the extension handles that
+  automatically by running a copy of curl from `/var/tmp`.
 - **Live mode shows `-` for runway** — expected for flights that haven't
   landed/departed yet, and for the aviationstack backend always.
 - **Nothing appears in KUAL** — make sure the folder is

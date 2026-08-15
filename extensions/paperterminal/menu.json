@@ -24,6 +24,7 @@
                     ]
                 },
                 { "name": "Switch demo / live mode",  "action": "bin/set_mode.sh", "params": "toggle" },
+                { "name": "Network self-test (HTTPS)", "action": "bin/nettest.sh" },
                 { "name": "Help + current settings",  "action": "bin/help.sh" }
             ]
         }

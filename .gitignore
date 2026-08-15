@@ -2,3 +2,6 @@
 extensions/paperterminal/paperterminal.conf
 extensions/paperterminal/paperterminal.log
 __pycache__/
+
+# Cross-build working directory
+build/.work/

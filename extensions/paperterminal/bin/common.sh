@@ -9,10 +9,18 @@ PT_BIN="$(cd "$(dirname "$0")" && pwd)"
 PT_HOME="$(dirname "$PT_BIN")"
 PT_CONF="$PT_HOME/paperterminal.conf"
 PT_DATA="$PT_HOME/data"
+PT_LIB="$PT_HOME/lib"
 PT_LOG="$PT_HOME/paperterminal.log"
 PT_TMP="/tmp/paperterminal.feed"
 
-PT_VERSION="1.1.0"
+# Bundled HTTPS stack: statically linked modern curl (OpenSSL inside) and
+# the Mozilla CA bundle. The Kindle's own curl/openssl/wget are far too
+# old for today's TLS and are deliberately not used when these exist.
+PT_CURL="$PT_LIB/curl"
+PT_CACERT="$PT_LIB/cacert.pem"
+PT_RAMCURL="/var/tmp/paperterminal-curl"
+
+PT_VERSION="1.2.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -70,7 +78,9 @@ save_conf() {
 # PaperTerminal settings - safe to edit over USB.
 # AIRPORT : default airport code (IATA like ZRH; ICAO also fine for AeroAPI)
 # MODE    : demo | live
-# FEED_URL: plain-http feed endpoint (see server/feed_proxy.py in the repo)
+# FEED_URL: feed endpoint (see server/feed_proxy.py in the repo).
+#           https:// works via the bundled lib/curl; plain http:// works
+#           even without it (busybox wget fallback).
 # ROWS    : flights per board, 1..14
 # REFRESH : live mode auto-redraw interval in seconds, 0 = draw once
 AIRPORT=$AIRPORT
@@ -91,3 +101,57 @@ save_conf_defaults() {
 }
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" > "$PT_LOG" 2>/dev/null; }
+
+# ----------------------------------------------------------------- fetch ---
+
+# Print the path of a runnable bundled curl, or fail. /mnt/us is a FAT
+# volume that firmwares often mount noexec, so if the binary cannot be
+# executed in place a copy is run from /var/tmp instead.
+pt_curl_bin() {
+    [ -f "$PT_CURL" ] || return 1
+    if "$PT_CURL" --version >/dev/null 2>&1; then
+        echo "$PT_CURL"
+        return 0
+    fi
+    if [ ! -x "$PT_RAMCURL" ] ||
+       [ "$(wc -c < "$PT_CURL")" != "$(wc -c < "$PT_RAMCURL")" ]; then
+        cp "$PT_CURL" "$PT_RAMCURL" 2>/dev/null && chmod 755 "$PT_RAMCURL" \
+            || return 1
+    fi
+    "$PT_RAMCURL" --version >/dev/null 2>&1 || return 1
+    echo "$PT_RAMCURL"
+}
+
+# pt_fetch <url> <outfile> - 0 on success. Prefers the bundled curl with
+# the bundled CA certificates (http and https alike); falls back to
+# busybox wget, which can only manage plain http.
+pt_fetch() {
+    CURLBIN="$(pt_curl_bin)"
+    if [ -n "$CURLBIN" ]; then
+        "$CURLBIN" -sS --connect-timeout 15 -m 40 \
+            --cacert "$PT_CACERT" -A "PaperTerminal/$PT_VERSION" \
+            -o "$2" "$1" 2>/dev/null
+        return $?
+    fi
+    case "$1" in
+        https://*)
+            log "https needs lib/curl (missing/unrunnable): $1"
+            return 1
+            ;;
+    esac
+    # The K3 busybox wget has no timeout option, so babysit it ourselves
+    # to keep a dead network from freezing the board for minutes.
+    wget -q -O "$2" "$1" 2>/dev/null &
+    wpid=$!
+    n=0
+    while kill -0 "$wpid" 2>/dev/null; do
+        n=$(( n + 1 ))
+        if [ $n -gt 25 ]; then
+            kill "$wpid" 2>/dev/null
+            break
+        fi
+        sleep 1
+    done
+    wait "$wpid" 2>/dev/null
+    [ -s "$2" ]
+}
