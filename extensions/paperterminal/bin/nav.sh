@@ -19,6 +19,7 @@
 # adjust KEY_MENU/KEY_BACK/KEY_HOME in paperterminal.conf if needed.
 
 . "$(dirname "$0")/common.sh"
+. "$(dirname "$0")/sources.sh"
 
 load_conf
 pt_capture_errors
@@ -85,11 +86,12 @@ draw_menu() {
     say 3 13 "R   RUNWAY DIAGRAM"
     say 3 15 "N   NETWORK SELF-TEST"
     say 3 17 "H   HELP + SETTINGS"
-    say 3 19 "P   AIRPORT: $AIRPORT  (PRESS TO CYCLE)"
-    say 1 22 "$LRULE"
-    say 1 24 "PRESS A LETTER TO OPEN A SCREEN."
-    say 1 25 "BACK = EXIT   MENU = THIS MENU   ON ANY"
-    say 1 26 "SCREEN: BACK = MENU, OTHER KEY = REDRAW."
+    say 3 19 "S   SEARCH AIRPORT (CODE, CITY, NAME)"
+    say 3 21 "P   AIRPORT: $AIRPORT  (PRESS TO CYCLE)"
+    say 1 23 "$LRULE"
+    say 1 25 "PRESS A LETTER TO OPEN A SCREEN."
+    say 1 26 "BACK = EXIT   MENU = THIS MENU   ON ANY"
+    say 1 27 "SCREEN: BACK = MENU, OTHER KEY = REDRAW."
     say 1 36 "$LRULE"
     say 1 37 "KEYS DEAD? RUN KEY TEST FROM KUAL"
 }
@@ -103,6 +105,123 @@ draw_keytest() {
     say 1 6 "paperterminal.conf TO THE CODES YOU SEE."
     say 1 7 "EXITS AFTER 20 KEYS OR 10 MIN IDLE."
     say 1 9 "$LRULE"
+}
+
+# ------------------------------------------------------------ search -------
+# Type on the keyboard to search data/airports.txt by IATA/ICAO code,
+# city, or airport name. Ranked: exact code, code prefix, city prefix,
+# then any substring match.
+
+key_to_char() { # standard qwerty keycodes -> lowercase char
+    case "$1" in
+        16) echo q;; 17) echo w;; 18) echo e;; 19) echo r;; 20) echo t;;
+        21) echo y;; 22) echo u;; 23) echo i;; 24) echo o;; 25) echo p;;
+        30) echo a;; 31) echo s;; 32) echo d;; 33) echo f;; 34) echo g;;
+        35) echo h;; 36) echo j;; 37) echo k;; 38) echo l;; 44) echo z;;
+        45) echo x;; 46) echo c;; 47) echo v;; 48) echo b;; 49) echo n;;
+        50) echo m;; 57) echo " ";;
+    esac
+}
+
+SRCH="/tmp/paperterminal.search"
+
+draw_search() {
+    Q=""
+    SEL=0
+    cls
+    say 1 1 "PAPERTERMINAL"
+    say_r 1 "AIRPORT SEARCH"
+    say 1 2 "$HRULE"
+    say 1 4 "TYPE A CODE, CITY, OR AIRPORT NAME:"
+    say 1 22 "$LRULE"
+    say 1 24 "UP/DOWN OR 5-WAY: CHOOSE   ENTER/CENTER:"
+    say 1 25 "SET AS DEFAULT AIRPORT     DEL: ERASE"
+    say 1 26 "BACK: MENU                 HOME: EXIT"
+    update_search
+}
+
+update_search() {
+    if [ -n "$Q" ]; then
+        awk -F'|' -v q="$Q" '
+            BEGIN { q = toupper(q) }
+            /^#/ { next }
+            {
+                u1 = toupper($1); u2 = toupper($2)
+                u5 = toupper($5); u6 = toupper($6)
+                if (u1 == q || u2 == q)                    { print "0|" $0; next }
+                if (index(u1, q) == 1 || index(u2, q) == 1){ print "1|" $0; next }
+                if (index(u5, q) == 1)                     { print "2|" $0; next }
+                if (index(u5, q) || index(u6, q))          { print "3|" $0; next }
+            }' "$PT_AIRPORTS" | sort | head -n 6 | cut -d'|' -f2- > "$SRCH"
+    else
+        : > "$SRCH"
+    fi
+    NRES="$(grep -c '|' "$SRCH" 2>/dev/null)"
+    [ "$SEL" -ge "$NRES" ] && SEL=$(( NRES - 1 ))
+    [ "$SEL" -lt 0 ] && SEL=0
+
+    say 1 6 "$(printf 'FIND: %-40.40s' "${Q}_")"
+    row=9
+    i=0
+    while IFS='|' read -r IA IC LA LO CITY NAME; do
+        [ $i -eq $SEL ] && mark=">" || mark=" "
+        say 1 $row "$(printf '%s %-4s %-4s %-14.14s %-21.21s' \
+            "$mark" "$IA" "$IC" "$CITY" "$NAME")"
+        row=$(( row + 2 ))
+        i=$(( i + 1 ))
+    done < "$SRCH"
+    while [ $row -le 19 ]; do
+        say 1 $row "$(printf '%-47s' ' ')"
+        row=$(( row + 2 ))
+    done
+    if [ -z "$Q" ]; then
+        say 1 9 "$(printf '%-47.47s' '  (START TYPING - 3270 AIRPORTS ON BOARD)')"
+    elif [ "$NRES" -eq 0 ]; then
+        say 1 9 "$(printf '%-47.47s' '  NO MATCHES')"
+    fi
+}
+
+search_key() { # one keypress on the search screen
+    case "$1" in
+        28|"$KEY_SELECT")
+            if [ "$NRES" -gt 0 ]; then
+                pick="$(sed -n "$(( SEL + 1 ))p" "$SRCH" | cut -d'|' -f1)"
+                if [ -n "$pick" ]; then
+                    AIRPORT="$(echo "$pick" | tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')"
+                    save_conf
+                    show menu
+                fi
+                return 0
+            fi
+            # Unknown code: accept it anyway, and try to fetch its details
+            # from AeroAPI once so the map gets coordinates.
+            QU="$(echo "$Q" | tr -d ' ' | tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')"
+            case "$QU" in
+                [A-Z0-9][A-Z0-9][A-Z0-9]|[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9])
+                    say 1 9 "$(printf '%-47.47s' "  LOOKING UP $QU VIA AEROAPI...")"
+                    line="$(apt_lookup_api "$QU")"
+                    if [ -n "$line" ]; then
+                        AIRPORT="$(echo "$line" | cut -d'|' -f1)"
+                        [ -n "$AIRPORT" ] || AIRPORT="$QU"
+                    else
+                        AIRPORT="$QU"
+                    fi
+                    save_conf
+                    show menu
+                    ;;
+            esac
+            ;;
+        14) Q="${Q%?}"; update_search ;;
+        "$KEY_UP")   SEL=$(( SEL - 1 )); [ $SEL -lt 0 ] && SEL=0; update_search ;;
+        "$KEY_DOWN") SEL=$(( SEL + 1 )); update_search ;;
+        *)
+            c="$(key_to_char "$1")"
+            if [ -n "$c" ] && [ ${#Q} -lt 30 ]; then
+                Q="$Q$c"
+                update_search
+            fi
+            ;;
+    esac
 }
 
 cycle_airport() {
@@ -127,6 +246,7 @@ show() { # show <screen>
         rwy)     sh "$PT_BIN/runways.sh" ;;
         net)     sh "$PT_BIN/nettest.sh" ;;
         help)    sh "$PT_BIN/help.sh" ;;
+        search)  draw_search ;;
         keytest) draw_keytest ;;
         *)       CUR=menu; draw_menu ;;
     esac
@@ -154,34 +274,38 @@ while :; do
     [ -n "$k" ] || continue
     arm_watchdog
 
-    if [ "$CUR" = "keytest" ]; then
-        KEYCOUNT=$(( KEYCOUNT + 1 ))
-        say 1 $(( 10 + KEYCOUNT % 24 )) "KEY $KEYCOUNT: CODE $k        "
-        [ $KEYCOUNT -ge 20 ] && break
-        continue
-    fi
-
     case "$k" in
         "$KEY_HOME") break ;;
         "$KEY_BACK")
-            if [ "$CUR" = "menu" ]; then break; else show menu; fi ;;
-        "$KEY_MENU") show menu ;;
+            if [ "$CUR" = "menu" ]; then break; else show menu; fi
+            continue ;;
+        "$KEY_MENU") show menu; continue ;;
+    esac
+
+    case "$CUR" in
+        keytest)
+            KEYCOUNT=$(( KEYCOUNT + 1 ))
+            say 1 $(( 10 + KEYCOUNT % 24 )) "KEY $KEYCOUNT: CODE $k        "
+            [ $KEYCOUNT -ge 20 ] && break
+            ;;
+        search)
+            search_key "$k"
+            ;;
+        menu)
+            case "$k" in
+                30) show arr ;;     # A
+                32) show dep ;;     # D
+                46) show all ;;     # C
+                50) show map ;;     # M
+                19) show rwy ;;     # R
+                49) show net ;;     # N
+                35) show help ;;    # H
+                31) show search ;;  # S
+                25) cycle_airport; show menu ;;  # P
+            esac ;;
         *)
-            if [ "$CUR" = "menu" ]; then
-                case "$k" in
-                    30) show arr ;;   # A
-                    32) show dep ;;   # D
-                    46) show all ;;   # C
-                    50) show map ;;   # M
-                    19) show rwy ;;   # R
-                    49) show net ;;   # N
-                    35) show help ;;  # H
-                    25) cycle_airport; show menu ;;  # P
-                esac
-            else
-                # framework may have repainted on this key - take it back
-                show "$CUR"
-            fi ;;
+            # framework may have repainted on this key - take it back
+            show "$CUR" ;;
     esac
 done
 

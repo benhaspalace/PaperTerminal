@@ -44,11 +44,14 @@ now_abs_min() {
         print j * 1440 + h * 60 + mi }'
 }
 
+# Airport database format: IATA|ICAO|LAT|LON|CITY|NAME
 apt_coords() { # apt_coords CODE -> "LAT LON", fails if unknown
     [ -f "$PT_AIRPORTS" ] || return 1
-    line="$(grep -i "^$1|" "$PT_AIRPORTS" 2>/dev/null | head -n 1 | tr -d '\r')"
+    line="$(awk -F'|' -v c="$1" \
+        'toupper($1) == c || toupper($2) == c { print $3, $4; exit }' \
+        "$PT_AIRPORTS" 2>/dev/null)"
     [ -n "$line" ] || return 1
-    echo "$line" | awk -F'|' '{print $2, $3}'
+    echo "$line"
 }
 
 # ---------------------------------------------------- awk json helpers -----
@@ -309,6 +312,38 @@ src_count() { # number of configured sources
         [ -n "$_s" ] && _n=$(( _n + 1 ))
     done
     echo $_n
+}
+
+# apt_lookup_api CODE - resolve an airport missing from the local database
+# via AeroAPI (needs an aeroapi source configured) and append it to
+# data/airports.txt so the traffic map gets coordinates. Prints the line.
+apt_lookup_api() {
+    CURLBIN="$(pt_curl_bin)" || return 1
+    key=""
+    i=0
+    while [ $i -lt 3 ]; do
+        i=$(( i + 1 ))
+        eval "spec=\$SOURCE$i"
+        case "$spec" in aeroapi,*) key="${spec#aeroapi,}"; break ;; esac
+    done
+    [ -n "$key" ] || return 1
+    "$CURLBIN" -sS --connect-timeout 15 -m 30 --cacert "$PT_CACERT" \
+        -H "x-apikey: $key" -A "PaperTerminal/$PT_VERSION" \
+        -o "$PT_TMP.apt" "$AEROAPI_BASE/airports/$1" 2>/dev/null || {
+        rm -f "$PT_TMP.apt"; return 1; }
+    line="$(awk "$PT_AWK_JSON"'
+        { buf = buf $0 }
+        END {
+            ia = jstr(buf, "code_iata"); ic = jstr(buf, "code_icao")
+            la = jnum(buf, "latitude");  lo = jnum(buf, "longitude")
+            ci = jstr(buf, "city");      na = jstr(buf, "name")
+            if ((ia == "" && ic == "") || la == "" || lo == "") exit
+            printf "%s|%s|%s|%s|%s|%s\n", ia, ic, la, lo, ci, na
+        }' "$PT_TMP.apt")"
+    rm -f "$PT_TMP.apt"
+    [ -n "$line" ] || return 1
+    echo "$line" >> "$PT_AIRPORTS"
+    echo "$line"
 }
 
 # src_positions OUT - live ADS-B positions near AIRPORT as CS|DX|DY lines.

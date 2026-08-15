@@ -1,0 +1,101 @@
+name: Release
+
+# Packages the KUAL extension into a zip that unzips directly onto the
+# Kindle's USB drive (it contains extensions/paperterminal/...) and
+# publishes it as a GitHub Release.
+#
+# Trigger by pushing a tag like v3.0.0, or run it manually from the
+# Actions tab with a tag name (the tag is created on the current commit
+# if it doesn't exist yet).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v3.0.0 (must match config.xml)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine tag and version
+        id: meta
+        run: |
+          TAG="${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check extension is sane and matches the tag
+        run: |
+          for f in extensions/paperterminal/bin/*.sh; do sh -n "$f"; done
+          python3 -c "import json; json.load(open('extensions/paperterminal/menu.json'))"
+          python3 -c "import xml.dom.minidom as m; m.parse('extensions/paperterminal/config.xml')"
+          XMLVER="$(grep -o '<version>[^<]*' extensions/paperterminal/config.xml | cut -d'>' -f2)"
+          if [ "$XMLVER" != "${{ steps.meta.outputs.version }}" ]; then
+            echo "config.xml version ($XMLVER) does not match tag (${{ steps.meta.outputs.version }})" >&2
+            exit 1
+          fi
+
+      - name: Build release zip
+        run: |
+          mkdir -p dist/extensions
+          cp -r extensions/paperterminal dist/extensions/
+          cd dist
+          zip -r -X "paperterminal-${{ steps.meta.outputs.version }}.zip" extensions
+          sha256sum "paperterminal-${{ steps.meta.outputs.version }}.zip" > \
+            "paperterminal-${{ steps.meta.outputs.version }}.zip.sha256"
+          unzip -l "paperterminal-${{ steps.meta.outputs.version }}.zip" | tail -5
+
+      - name: Write release notes
+        run: |
+          V="${{ steps.meta.outputs.version }}"
+          cat > notes.md <<EOF
+          # PaperTerminal $V
+
+          Airport arrival/departure board for the jailbroken Kindle 3
+          Keyboard (KUAL extension). Talks directly to public flight APIs
+          via a bundled static curl/OpenSSL - no proxy needed.
+
+          ## Install
+
+          1. Download \`paperterminal-$V.zip\` below.
+          2. Plug the Kindle in over USB and unzip the archive onto the
+             Kindle's USB drive root - it contains
+             \`extensions/paperterminal/...\` and merges into any existing
+             \`extensions\` folder. (Or unzip anywhere and copy the inner
+             \`paperterminal\` folder into the Kindle's \`extensions\`
+             folder.)
+          3. Put your API key in
+             \`extensions/paperterminal/paperterminal.conf\`:
+             \`SOURCE1=aeroapi,YOUR_KEY\` (or \`aviationstack,YOUR_KEY\`).
+          4. Eject, open KUAL, pick **PaperTerminal Flight Board**, and run
+             the network self-test first.
+
+          Requires a jailbroken Kindle 3 with the KUAL kindlet installed -
+          see the README for details.
+          EOF
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/paperterminal-*.zip* --clobber \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/paperterminal-*.zip* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "PaperTerminal ${{ steps.meta.outputs.version }}" \
+              --notes-file notes.md
+          fi

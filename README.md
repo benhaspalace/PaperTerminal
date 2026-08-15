@@ -44,6 +44,10 @@ in a small busybox-awk parser.
 - **Real on-device navigation**: MENU opens the PaperTerminal menu, BACK
   returns to it (or exits), letter keys jump between screens, any other
   key redraws — no trips back to KUAL needed
+- **Airport search on the keyboard**: type a code, city, or name and pick
+  from ranked matches — 3,270 scheduled-service airports are bundled
+  (OurAirports data), and unknown codes are looked up via AeroAPI once
+  and remembered
 - **Failover**: up to three data sources tried in order (e.g. AeroAPI
   first, aviationstack as backup), and multiple ADS-B sources for positions
 - Response caching on-device to protect your API quota
@@ -72,6 +76,13 @@ in a small busybox-awk parser.
 > services — it cannot reach the flight APIs. PaperTerminal needs Wi-Fi.
 
 ## Install
+
+The easiest way: download `paperterminal-<version>.zip` from the
+[Releases page](../../releases) and unzip it onto the Kindle's USB drive
+root — it contains `extensions/paperterminal/…` and merges into any
+existing `extensions` folder. Then continue at step 3.
+
+From a checkout instead:
 
 1. Plug the Kindle in over USB.
 2. Copy the `extensions/paperterminal` folder from this repo into the
@@ -110,8 +121,15 @@ navigate entirely on the device:
 | `A` `D` `C` | arrivals / departures / combined board |
 | `M` `R` | live traffic map / runway diagram |
 | `N` `H` | network self-test / help |
+| `S` | **airport search**: type a code, city, or name; five-way up/down (or arrow keys) picks a match, Enter/centre sets it as the default airport, DEL erases |
 | `P` | cycle the default airport through the presets |
 | any other key | redraw the current screen (re-fetches data) |
+
+In the search screen, matches are ranked exact code → code prefix → city
+prefix → any substring, over the bundled 3,270-airport database. A code
+that isn't in the database can still be selected with Enter: it is looked
+up once via AeroAPI and appended to `data/airports.txt`, so the traffic
+map gets its coordinates too.
 
 Two Kindle quirks are handled for you: KUAL repaints its own menu right
 after launching an action (racing whatever the action draws), so screens
@@ -137,11 +155,18 @@ CACHE=300          # seconds to reuse fetched data (protects API quota)
 KEY_MENU=139       # navigation keycodes - see the key test screen
 KEY_BACK=158
 KEY_HOME=102
+KEY_UP=103         # five-way, used in the search screen
+KEY_DOWN=108
+KEY_SELECT=194
 ```
 
-This is also how you set an airport that isn't in the preset menu. For
-the traffic map, the airport needs coordinates in `data/airports.txt`
-(major airports are bundled; adding one is a single `CODE|LAT|LON` line).
+Airports can also be set here directly (`AIRPORT=XXX`), but the search
+screen (`S`) is the comfortable way. The traffic map needs the airport's
+coordinates from `data/airports.txt` (format
+`IATA|ICAO|LAT|LON|CITY|NAME`) — 3,270 airports are bundled, unknown
+codes are auto-added via AeroAPI on selection, and the **Refresh airport
+database** GitHub Actions workflow regenerates the file from the
+public-domain OurAirports dataset.
 
 ## Flight data — direct from public APIs
 
@@ -209,7 +234,7 @@ extensions/paperterminal/   the KUAL extension (copy this to the Kindle)
   bin/nettest.sh            network / HTTPS / sources self-test
   bin/help.sh               help + current settings screen
   bin/common.sh             shared helpers (config, eips drawing, fetching)
-  data/airports.txt         airport coordinates for the traffic map
+  data/airports.txt         searchable airport database (3,270 airports)
   data/airlines.txt         IATA airline code -> display name
   data/runways/*.txt        runway line drawings (ZRH, BUD, AMS, STR)
   lib/curl                  static modern curl + OpenSSL for the K3
@@ -217,7 +242,10 @@ extensions/paperterminal/   the KUAL extension (copy this to the Kindle)
   lib/cacert.pem            Mozilla CA root bundle
   lib/BUILDINFO.txt         provenance: versions, checksums, target
 build/build-https-stack.sh  reproducible cross-build of lib/ from source
-.github/workflows/          CI: rebuild + test + refresh the HTTPS stack
+build/update-airports.py    regenerate the airport database (OurAirports)
+.github/workflows/          CI: HTTPS-stack rebuild, airport-db refresh,
+                            and release packaging (tag v* or manual run
+                            publishes the ready-to-copy zip)
 ```
 
 ## Troubleshooting

@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="3.0.0"
+PT_VERSION="3.1.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -81,6 +81,9 @@ load_conf() {
     KEY_MENU="$(cfg KEY_MENU)"; case "$KEY_MENU" in ''|*[!0-9]*) KEY_MENU=139;; esac
     KEY_BACK="$(cfg KEY_BACK)"; case "$KEY_BACK" in ''|*[!0-9]*) KEY_BACK=158;; esac
     KEY_HOME="$(cfg KEY_HOME)"; case "$KEY_HOME" in ''|*[!0-9]*) KEY_HOME=102;; esac
+    KEY_UP="$(cfg KEY_UP)";     case "$KEY_UP" in ''|*[!0-9]*) KEY_UP=103;; esac
+    KEY_DOWN="$(cfg KEY_DOWN)"; case "$KEY_DOWN" in ''|*[!0-9]*) KEY_DOWN=108;; esac
+    KEY_SELECT="$(cfg KEY_SELECT)"; case "$KEY_SELECT" in ''|*[!0-9]*) KEY_SELECT=194;; esac
     INPUT_DEVS="$(cfg INPUT_DEVS)"
     [ -n "$INPUT_DEVS" ] || INPUT_DEVS="/dev/input/event0 /dev/input/event1 /dev/input/event2"
 }
@@ -111,6 +114,9 @@ CACHE=$CACHE
 KEY_MENU=$KEY_MENU
 KEY_BACK=$KEY_BACK
 KEY_HOME=$KEY_HOME
+KEY_UP=$KEY_UP
+KEY_DOWN=$KEY_DOWN
+KEY_SELECT=$KEY_SELECT
 INPUT_DEVS=$INPUT_DEVS
 EOF
 }
@@ -127,6 +133,9 @@ save_conf_defaults() {
     KEY_MENU=139
     KEY_BACK=158
     KEY_HOME=102
+    KEY_UP=103
+    KEY_DOWN=108
+    KEY_SELECT=194
     INPUT_DEVS="/dev/input/event0 /dev/input/event1 /dev/input/event2"
     save_conf
 }
