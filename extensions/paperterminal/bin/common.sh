@@ -31,7 +31,7 @@ PT_RAMEVKEY="/var/tmp/paperterminal-evkey"
 PT_OPENSSL="$PT_LIB/openssl"
 PT_RAMOPENSSL="/var/tmp/paperterminal-openssl"
 
-PT_VERSION="4.0.5"
+PT_VERSION="4.1.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -109,6 +109,8 @@ load_conf() {
     KEY_SELECT="$(cfg KEY_SELECT)"; case "$KEY_SELECT" in ''|*[!0-9]*) KEY_SELECT=194;; esac
     INPUT_DEVS="$(cfg INPUT_DEVS)"
     [ -n "$INPUT_DEVS" ] || INPUT_DEVS="/dev/input/event0 /dev/input/event1 /dev/input/event2"
+    PREVENT_SLEEP="$(cfg PREVENT_SLEEP)"
+    [ "$PREVENT_SLEEP" = "off" ] || PREVENT_SLEEP="on"
 }
 
 save_conf() {
@@ -151,7 +153,10 @@ save_conf() {
 #            last position fallback when the ADS-B aggregators fail.
 #            Anonymous OpenSky allows ~400 credits/day; default 300
 #            keeps a margin. 0 disables OpenSky entirely.
-# KEY_*    : keycodes for on-device navigation (see the key test screen)
+# KEY_*    : keycodes for on-device navigation (see the key test screen).
+#            Touch Kindles need no keys: tap = menu, tap lines to open.
+# PREVENT_SLEEP : on|off - hold off the screensaver while PaperTerminal
+#            is open (firmware 5.x lipc; ignored where unavailable)
 AIRPORT=$AIRPORT
 SOURCE1=$SOURCE1
 SOURCE2=$SOURCE2
@@ -172,6 +177,7 @@ KEY_UP=$KEY_UP
 KEY_DOWN=$KEY_DOWN
 KEY_SELECT=$KEY_SELECT
 INPUT_DEVS=$INPUT_DEVS
+PREVENT_SLEEP=$PREVENT_SLEEP
 EOF
 }
 
@@ -196,10 +202,18 @@ save_conf_defaults() {
     KEY_DOWN=108
     KEY_SELECT=194
     INPUT_DEVS="/dev/input/event0 /dev/input/event1 /dev/input/event2"
+    PREVENT_SLEEP="on"
     save_conf
 }
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$PT_LOG" 2>/dev/null; }
+
+# Keep the Kindle awake while a board is on display (firmware 5.x lipc;
+# harmless no-op where the tool does not exist). pt_sleep_block 1|0.
+pt_sleep_block() {
+    command -v lipc-set-prop >/dev/null 2>&1 || return 0
+    lipc-set-prop com.lab126.powerd preventScreenSaver "$1" 2>/dev/null
+}
 
 # ----------------------------------------------------------------- fetch ---
 

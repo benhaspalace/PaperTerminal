@@ -1,8 +1,16 @@
 # PaperTerminal
 
-A lightweight airport arrival/departure board for the **Kindle 3 Keyboard**
-(K3, including the 3G EU model), running as a [KUAL](https://www.mobileread.com/forums/showthread.php?t=203326)
-extension. It turns the 600x800 e-ink screen into a classic flight board:
+A lightweight airport arrival/departure board for jailbroken Kindles,
+running as a [KUAL](https://www.mobileread.com/forums/showthread.php?t=203326)
+extension. Supported and tested targets:
+
+- **Kindle Basic 7th gen (KT2, 2014, model 90C6)** and other firmware-5.x
+  Kindles with a 600x800 screen — **touch-first**: tap to navigate, with
+  an on-screen keyboard for airport search
+- **Kindle 3 Keyboard** (K3, including the 3G EU model) — hardware-key
+  navigation, including its 2010-era quirks (see Troubleshooting)
+
+It turns the 600x800 e-ink screen into a classic flight board:
 
 ```
  PAPERTERMINAL                ZRH \v/^ ALL FLIGHTS
@@ -52,13 +60,16 @@ provides and costs.
   open ADS-B aggregators, no API key needed
 - **Runway diagrams**: simple line drawings for ZRH, BUD, AMS and STR
   (plain-text files — add your own airport in minutes)
-- **Real on-device navigation**: MENU opens the PaperTerminal menu, BACK
-  returns to it (or exits), letter keys jump between screens, any other
-  key redraws — no trips back to KUAL needed
-- **Airport search on the keyboard**: type a code, city, or name and pick
-  from ranked matches — 3,270 scheduled-service airports are bundled
-  (OurAirports data), and unknown codes are looked up via AeroAPI once
-  and remembered
+- **Real on-device navigation, touch and keys**: on touch Kindles, tap
+  any screen for the menu, tap a menu line to open it; on the K3, MENU
+  opens the menu, BACK returns, letter keys jump between screens — no
+  trips back to KUAL needed
+- **Airport search**: type on the K3's keyboard or tap the on-screen
+  QWERTY keyboard, pick from ranked matches (tap a result or five-way +
+  Enter) — 3,270 scheduled-service airports are bundled (OurAirports
+  data), and unknown codes are looked up via AeroAPI once and remembered
+- Screensaver hold-off while a board is displayed (firmware 5.x,
+  `PREVENT_SLEEP` config)
 - **Failover**: up to three data sources tried in order (e.g. AeroAPI
   first, aviationstack, then keyless adsb), and five keyless feeds behind
   the adsb source (adsb.fi, adsb.lol, adsb.one, airplanes.live, OpenSky)
@@ -75,11 +86,14 @@ provides and costs.
 
 ## Requirements
 
-- Kindle 3 Keyboard (Wi-Fi or 3G model), **jailbroken**
-  (see the [MobileRead K3 jailbreak thread](https://www.mobileread.com/forums/showthread.php?t=122519))
-- **KUAL** installed. On the K3 that is the *KUAL Kindlet* (`KUAL-*.azw2`
-  placed in the `documents` folder), which also requires the kindlet
-  jailbreak key from the same MobileRead resources
+- A **jailbroken** Kindle:
+  - *Firmware 5.x devices (Kindle Basic/KT2 and similar)*: jailbreak per
+    the MobileRead wiki for your firmware, then install **KUAL** via MRPI
+    (the standard 5.x route)
+  - *Kindle 3 Keyboard*: the
+    [K3 jailbreak](https://www.mobileread.com/forums/showthread.php?t=122519)
+    plus the *KUAL Kindlet* (`KUAL-*.azw2` in `documents`, with the
+    kindlet jailbreak key)
 - Wi-Fi. **No API key is required** — the default source is keyless
   ADS-B. Optionally add a free key from
   [FlightAware AeroAPI](https://www.flightaware.com/aeroapi) and/or
@@ -125,7 +139,18 @@ From a checkout instead:
 ## Usage and navigation
 
 Open any screen from KUAL, or use **Open PaperTerminal (menu)** and
-navigate entirely on the device:
+navigate entirely on the device.
+
+**Touch (KT2 and other touch Kindles):**
+
+| Tap | Action |
+|-----|--------|
+| any ordinary screen | open the PaperTerminal menu |
+| a menu line | open that screen (EXIT line leaves to the Kindle UI) |
+| search: on-screen QWERTY | type (DEL erases, OK confirms) |
+| search: a result line | set it as the default airport |
+
+**Hardware keys (K3):**
 
 | Key | Action |
 |-----|--------|
@@ -135,8 +160,8 @@ navigate entirely on the device:
 | `A` `D` `C` | arrivals / departures / combined board |
 | `M` `R` | live traffic map / runway diagram |
 | `N` `H` | network self-test / help |
-| `S` | **airport search**: type a code, city, or name; five-way up/down (or arrow keys) picks a match, Enter/centre sets it as the default airport, DEL erases |
-| `P` | cycle the default airport through the presets |
+| `S` | **airport search**: type a code, city, or name; five-way up/down picks a match, Enter/centre sets it, DEL erases |
+| `P` | cycle the default airport / `X` exit |
 | any other key | redraw the current screen (re-fetches data) |
 
 Boards and the traffic map keep updating themselves every `REFRESH`
@@ -339,10 +364,11 @@ build/update-airports.py    regenerate the airport database (OurAirports)
   KUAL's repaint and then re-takes the screen on every keypress. If you
   still lose the screen, press any letter key — the current screen
   redraws.
-- **Navigation keys do nothing** — your firmware may use different
-  keycodes. Run **Key test (navigation setup)** from KUAL, press the
-  Menu/Back/Home keys, and put the codes shown into `KEY_MENU`,
-  `KEY_BACK`, `KEY_HOME` in `paperterminal.conf`.
+- **Navigation keys or taps do nothing** — run **Key test (navigation
+  setup)** from KUAL: it shows keycodes for presses and grid positions
+  for taps. Put deviating keycodes into `KEY_MENU`/`KEY_BACK`/`KEY_HOME`
+  in `paperterminal.conf`; if taps land on wrong rows, your touch device
+  may not be in the default `INPUT_DEVS` list — adjust it there too.
 - **`ALL CONFIGURED DATA SOURCES FAILED` screen** — run the network
   self-test: it checks the TLS stack, internet reachability, each source,
   and ADS-B separately. The most common cause is a missing API key in

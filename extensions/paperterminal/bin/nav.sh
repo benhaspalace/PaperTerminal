@@ -42,6 +42,7 @@ esac
 echo "$$" > "$PT_NAVPIDF"
 
 log "nav start: ${1:-menu} (v$PT_VERSION)"
+[ "$PREVENT_SLEEP" = "on" ] && pt_sleep_block 1
 
 PT_KEYPIPE="/tmp/paperterminal.keys"
 READER_PIDS=""
@@ -53,6 +54,7 @@ cleanup() {
     [ -n "$WATCHDOG_PID" ] && kill $WATCHDOG_PID 2>/dev/null
     [ -n "$SHOWPID" ] && kill $SHOWPID 2>/dev/null
     rm -f "$PT_KEYPIPE"
+    [ "$PREVENT_SLEEP" = "on" ] && pt_sleep_block 0
     [ "$(cat "$PT_NAVPIDF" 2>/dev/null)" = "$$" ] && rm -f "$PT_NAVPIDF"
 }
 trap cleanup EXIT
@@ -90,23 +92,35 @@ start_input() {
     exec 3< "$PT_KEYPIPE"
 }
 
-# Print the keycode of the next key-down event (blocks). Empty output for
-# non-key events; callers loop.
-getkey() {
+# Print the next input event as a text line (blocks):
+#   "K <code>" key-down, "T <x> <y>" tap, "A <xmax> <ymax>" touch ranges.
+getevent() {
     if [ "$INPUT_MODE" = "evkey" ]; then
-        if ! read -r _k <&3; then
+        if ! read -r _l <&3; then
             sleep 1   # reader died; avoid a tight spin until watchdog fires
             return 0
         fi
-        case "$_k" in ''|*[!0-9]*) ;; *) echo "$_k" ;; esac
+        echo "$_l"
     else
-        dd bs=16 count=1 <&3 2>/dev/null | od -An -tu1 2>/dev/null | awk '
+        _c="$(dd bs=16 count=1 <&3 2>/dev/null | od -An -tu1 2>/dev/null | awk '
             { for (i = 1; i <= NF; i++) b[++n] = $i }
             END {
                 if (n >= 16 && b[9] + b[10] * 256 == 1 && b[13] == 1)
                     print b[11] + b[12] * 256
-            }'
+            }')"
+        [ -n "$_c" ] && echo "K $_c"
     fi
+}
+
+# --------------------------------------------------------------- touch -----
+# Taps map to the 50x40 eips text grid. Axis ranges come from evkey's
+# A-line; screen-sized defaults otherwise.
+TXMAX=599
+TYMAX=799
+
+tap_rc() { # x y -> TCOL TROW
+    TCOL=$(( $1 * 50 / (TXMAX + 1) ))
+    TROW=$(( $2 * 40 / (TYMAX + 1) ))
 }
 
 # Idle watchdog: without keypresses the session ends so no readers
@@ -140,22 +154,25 @@ draw_menu() {
     say 3 17 "H   HELP + SETTINGS"
     say 3 19 "S   SEARCH AIRPORT (CODE, CITY, NAME)"
     say 3 21 "P   AIRPORT: $AIRPORT  (PRESS TO CYCLE)"
-    say 1 23 "$LRULE"
-    say 1 25 "PRESS A LETTER TO OPEN A SCREEN."
-    say 1 26 "BACK = EXIT   MENU = THIS MENU   ON ANY"
-    say 1 27 "SCREEN: BACK = MENU, OTHER KEY = REDRAW."
+    say 3 23 "X   EXIT TO THE KINDLE HOME"
+    say 1 25 "$LRULE"
+    say 1 27 "TAP A LINE, OR PRESS ITS LETTER."
+    say 1 28 "ON ANY SCREEN: TAP = THIS MENU. KEYS:"
+    say 1 29 "BACK = MENU/EXIT, MENU = MENU, OTHER ="
+    say 1 30 "REDRAW THE CURRENT SCREEN."
     say 1 36 "$LRULE"
-    say 1 37 "KEYS DEAD? RUN KEY TEST FROM KUAL"
+    say 1 37 "NO REACTION? RUN KEY TEST FROM KUAL"
 }
 
 draw_keytest() {
     cls
-    say 1 1 "PAPERTERMINAL - KEY TEST"
+    say 1 1 "PAPERTERMINAL - KEY + TOUCH TEST"
     say 1 2 "$HRULE"
-    say 1 4 "PRESS KEYS; THEIR CODES APPEAR BELOW."
-    say 1 5 "SET KEY_MENU / KEY_BACK / KEY_HOME IN"
-    say 1 6 "paperterminal.conf TO THE CODES YOU SEE."
-    say 1 7 "EXITS AFTER 20 KEYS OR 10 MIN IDLE."
+    say 1 4 "PRESS KEYS OR TAP THE SCREEN; CODES AND"
+    say 1 5 "TAP POSITIONS APPEAR BELOW. SET KEY_MENU /"
+    say 1 6 "KEY_BACK / KEY_HOME IN paperterminal.conf"
+    say 1 7 "IF YOUR KEYCODES DIFFER. EXITS AFTER 20"
+    say 1 8 "EVENTS OR 10 MIN IDLE."
     say 1 9 "$LRULE"
 }
 
@@ -184,12 +201,33 @@ draw_search() {
     say 1 1 "PAPERTERMINAL"
     say_r 1 "AIRPORT SEARCH"
     say 1 2 "$HRULE"
-    say 1 4 "TYPE A CODE, CITY, OR AIRPORT NAME:"
-    say 1 22 "$LRULE"
-    say 1 24 "UP/DOWN OR 5-WAY: CHOOSE   ENTER/CENTER:"
-    say 1 25 "SET AS DEFAULT AIRPORT     DEL: ERASE"
-    say 1 26 "BACK: MENU                 HOME: EXIT"
+    say 1 4 "TYPE OR TAP A CODE, CITY, OR AIRPORT NAME;"
+    say 1 5 "TAP A RESULT (OR UP/DOWN + ENTER) TO SET."
+    say 1 21 "$LRULE"
+    # on-screen tap keyboard: 5-column cells, rows at 28/31/34
+    say 1 28 "  Q    W    E    R    T    Y    U    I    O    P"
+    say 1 31 "  A    S    D    F    G    H    J    K    L"
+    say 1 34 "  Z    X    C    V    B    N    M    DEL  OK"
+    say 1 37 "KEYS: DEL ERASES, ENTER SETS, BACK = MENU"
     update_search
+}
+
+# Tap-keyboard lookup: row band + 5-column cell -> character
+kb_char() { # kbrow cell
+    case "$1" in
+        0) case "$2" in
+               0) echo q;; 1) echo w;; 2) echo e;; 3) echo r;; 4) echo t;;
+               5) echo y;; 6) echo u;; 7) echo i;; 8) echo o;; 9) echo p;;
+           esac ;;
+        1) case "$2" in
+               0) echo a;; 1) echo s;; 2) echo d;; 3) echo f;; 4) echo g;;
+               5) echo h;; 6) echo j;; 7) echo k;; 8) echo l;;
+           esac ;;
+        2) case "$2" in
+               0) echo z;; 1) echo x;; 2) echo c;; 3) echo v;; 4) echo b;;
+               5) echo n;; 6) echo m;; 7) echo DEL;; 8|9) echo OK;;
+           esac ;;
+    esac
 }
 
 update_search() {
@@ -233,36 +271,38 @@ update_search() {
     fi
 }
 
+search_select() { # confirm the highlighted result (or look up the code)
+    if [ "$NRES" -gt 0 ]; then
+        pick="$(sed -n "$(( SEL + 1 ))p" "$SRCH" | cut -d'|' -f1)"
+        if [ -n "$pick" ]; then
+            AIRPORT="$(echo "$pick" | tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')"
+            save_conf
+            show menu
+        fi
+        return 0
+    fi
+    # Unknown code: accept it anyway, and try to fetch its details
+    # from AeroAPI once so the map gets coordinates.
+    QU="$(echo "$Q" | tr -d ' ' | tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')"
+    case "$QU" in
+        [A-Z0-9][A-Z0-9][A-Z0-9]|[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9])
+            say 1 9 "$(printf '%-47.47s' "  LOOKING UP $QU VIA AEROAPI...")"
+            line="$(apt_lookup_api "$QU")"
+            if [ -n "$line" ]; then
+                AIRPORT="$(echo "$line" | cut -d'|' -f1)"
+                [ -n "$AIRPORT" ] || AIRPORT="$QU"
+            else
+                AIRPORT="$QU"
+            fi
+            save_conf
+            show menu
+            ;;
+    esac
+}
+
 search_key() { # one keypress on the search screen
     case "$1" in
-        28|"$KEY_SELECT")
-            if [ "$NRES" -gt 0 ]; then
-                pick="$(sed -n "$(( SEL + 1 ))p" "$SRCH" | cut -d'|' -f1)"
-                if [ -n "$pick" ]; then
-                    AIRPORT="$(echo "$pick" | tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')"
-                    save_conf
-                    show menu
-                fi
-                return 0
-            fi
-            # Unknown code: accept it anyway, and try to fetch its details
-            # from AeroAPI once so the map gets coordinates.
-            QU="$(echo "$Q" | tr -d ' ' | tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')"
-            case "$QU" in
-                [A-Z0-9][A-Z0-9][A-Z0-9]|[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9])
-                    say 1 9 "$(printf '%-47.47s' "  LOOKING UP $QU VIA AEROAPI...")"
-                    line="$(apt_lookup_api "$QU")"
-                    if [ -n "$line" ]; then
-                        AIRPORT="$(echo "$line" | cut -d'|' -f1)"
-                        [ -n "$AIRPORT" ] || AIRPORT="$QU"
-                    else
-                        AIRPORT="$QU"
-                    fi
-                    save_conf
-                    show menu
-                    ;;
-            esac
-            ;;
+        28|"$KEY_SELECT") search_select ;;
         14) Q="${Q%?}"; update_search ;;
         "$KEY_UP")   SEL=$(( SEL - 1 )); [ $SEL -lt 0 ] && SEL=0; update_search ;;
         "$KEY_DOWN") SEL=$(( SEL + 1 )); update_search ;;
@@ -273,6 +313,56 @@ search_key() { # one keypress on the search screen
                 update_search
             fi
             ;;
+    esac
+}
+
+search_tap() { # one tap on the search screen (TCOL/TROW set)
+    if [ "$TROW" -ge 27 ]; then
+        if [ "$TROW" -le 29 ]; then kr=0
+        elif [ "$TROW" -le 32 ]; then kr=1
+        elif [ "$TROW" -le 35 ]; then kr=2
+        else return 0
+        fi
+        ch="$(kb_char $kr $(( TCOL / 5 )))"
+        case "$ch" in
+            '')  ;;
+            DEL) Q="${Q%?}"; update_search ;;
+            OK)  search_select ;;
+            *)   [ ${#Q} -lt 30 ] && { Q="$Q$ch"; update_search; } ;;
+        esac
+    elif [ "$TROW" -ge 8 ] && [ "$TROW" -le 19 ]; then
+        idx=$(( (TROW - 8) / 2 ))
+        if [ "$idx" -lt "${NRES:-0}" ]; then
+            SEL=$idx
+            search_select
+        fi
+    fi
+}
+
+# Tap dispatch by screen: menu lines open screens, EXIT leaves, any tap
+# on an ordinary screen returns to the menu.
+handle_tap() { # raw-x raw-y (TCOL/TROW already set)
+    case "$CUR" in
+        keytest)
+            KEYCOUNT=$(( KEYCOUNT + 1 ))
+            say 1 $(( 10 + KEYCOUNT % 24 )) "EVT $KEYCOUNT: TAP $1,$2 -> COL $TCOL ROW $TROW   "
+            [ $KEYCOUNT -ge 20 ] && NAV_EXIT=1
+            ;;
+        search) search_tap ;;
+        menu)
+            case "$TROW" in
+                4|5)   show arr ;;
+                6|7)   show dep ;;
+                8|9)   show all ;;
+                10|11) show map ;;
+                12|13) show rwy ;;
+                14|15) show net ;;
+                16|17) show help ;;
+                18|19) show search ;;
+                20|21) cycle_airport; show menu ;;
+                22|23) NAV_EXIT=1 ;;
+            esac ;;
+        *) show menu ;;
     esac
 }
 
@@ -340,10 +430,25 @@ fi
 arm_watchdog
 
 KEYCOUNT=0
+NAV_EXIT=0
 while :; do
-    k="$(getkey)"
-    [ -n "$k" ] || continue
+    ev="$(getevent)"
+    [ -n "$ev" ] || continue
     arm_watchdog
+
+    set -- $ev
+    case "$1" in
+        A)  # touch axis ranges reported by evkey
+            case "$2$3" in *[!0-9]*|'') ;; *) TXMAX="$2"; TYMAX="$3" ;; esac
+            continue ;;
+        T)
+            tap_rc "$2" "$3"
+            handle_tap "$2" "$3"
+            [ "$NAV_EXIT" = 1 ] && break
+            continue ;;
+        K)  k="$2" ;;
+        *)  continue ;;
+    esac
 
     case "$k" in
         "$KEY_HOME") break ;;
@@ -356,7 +461,7 @@ while :; do
     case "$CUR" in
         keytest)
             KEYCOUNT=$(( KEYCOUNT + 1 ))
-            say 1 $(( 10 + KEYCOUNT % 24 )) "KEY $KEYCOUNT: CODE $k        "
+            say 1 $(( 10 + KEYCOUNT % 24 )) "EVT $KEYCOUNT: KEY CODE $k         "
             [ $KEYCOUNT -ge 20 ] && break
             ;;
         search)
@@ -373,7 +478,10 @@ while :; do
                 35) show help ;;    # H
                 31) show search ;;  # S
                 25) cycle_airport; show menu ;;  # P
-            esac ;;
+                45) NAV_EXIT=1 ;;   # X
+            esac
+            [ "$NAV_EXIT" = 1 ] && break
+            ;;
         *)
             # framework may have repainted on this key - take it back
             show "$CUR" ;;
