@@ -7,7 +7,10 @@
 #   SOURCE2=aviationstack,YOUR_KEY  aviationstack (no runway data)
 #
 # Live positions for the traffic map come straight from open ADS-B
-# aggregators (adsb.fi first, adsb.lol as fallback) - no key needed.
+# aggregators (adsb.fi first, adsb.lol as fallback, then the OpenSky
+# Network as a last resort) - no key needed. OpenSky's anonymous API is
+# limited (~400 credits/day, 10 s data resolution), so its calls are
+# budgeted (OPENSKY_DAY) and all position results are cached for 10 s.
 #
 # All JSON is parsed on-device by a small awk object scanner that tracks
 # brace depth and string state, so it does not depend on key order or
@@ -20,6 +23,7 @@ PT_CACHE_DIR="/tmp/paperterminal.cache"
 AEROAPI_BASE="${PT_AEROAPI_BASE:-https://aeroapi.flightaware.com/aeroapi}"
 AVSTACK_BASE="${PT_AVSTACK_BASE:-http://api.aviationstack.com/v1}"
 ADSB_DEFAULT="https://opendata.adsb.fi/api/v2 https://api.adsb.lol/v2"
+OPENSKY_BASE="${PT_OPENSKY_BASE:-https://opensky-network.org/api}"
 
 # --------------------------------------------------------------- time ------
 
@@ -234,6 +238,55 @@ function emit(o,   st, seg, oth, t, mn, fo, fl, cs, ao, al, aco, ty, ap) {
 }
 '
 
+# OpenSky /states/all returns arrays, not objects: {"states":[[icao24,
+# callsign, origin_country, t_pos, t_contact, lon, lat, ...], ...]}.
+# Elements are comma-split with string awareness (country names may
+# contain commas); callsign is field 2, lon 6, lat 7.
+PT_AWK_OPENSKY='
+function rnd(x) { return x >= 0 ? int(x + 0.5) : -int(-x + 0.5) }
+function state(s,   m, j, c2, el, k, cs, lon, lat) {
+    k = 0; el = ""; ins2 = 0; esc2 = 0
+    m = length(s)
+    for (j = 1; j <= m; j++) {
+        c2 = substr(s, j, 1)
+        if (ins2) {
+            if (esc2) esc2 = 0
+            else if (c2 == "\\") esc2 = 1
+            else if (c2 == "\"") ins2 = 0
+            else el = el c2
+            continue
+        }
+        if (c2 == "\"") { ins2 = 1; continue }
+        if (c2 == ",") { k++; f[k] = el; el = ""; continue }
+        el = el c2
+    }
+    k++; f[k] = el
+    if (k < 7) return
+    cs = f[2]; gsub(/^ +/, "", cs); gsub(/ +$/, "", cs)
+    if (cs == "" || f[6] !~ /[0-9]/ || f[7] !~ /[0-9]/) return
+    lon = f[6] + 0; lat = f[7] + 0
+    printf "%s|%d|%d\n", toupper(cs), \
+        rnd((lon - LO) * 60 * cos(LA * 3.141592653589793 / 180)), \
+        rnd((lat - LA) * 60)
+}
+{ buf = buf $0 }
+END {
+    n = length(buf); adep = 0; ins = 0; esc = 0; st = 0
+    for (i = 1; i <= n; i++) {
+        c = substr(buf, i, 1)
+        if (ins) {
+            if (esc) esc = 0
+            else if (c == "\\") esc = 1
+            else if (c == "\"") ins = 0
+            continue
+        }
+        if (c == "\"") { ins = 1; continue }
+        if (c == "[") { adep++; if (adep == 2) st = i + 1; continue }
+        if (c == "]") { if (adep == 2 && st) state(substr(buf, st, i - st)); adep--; continue }
+    }
+}
+'
+
 PT_AWK_ADSB='
 function rnd(x) { return x >= 0 ? int(x + 0.5) : -int(-x + 0.5) }
 function emit(o,   cs, la, lo, dx, dy) {
@@ -441,13 +494,80 @@ apt_lookup_api() {
     echo "$line"
 }
 
-# src_positions OUT - live ADS-B positions near AIRPORT as CS|DX|DY lines.
+# --------------------------------------------------- opensky budget --------
+# OpenSky's anonymous REST API allows roughly 400 credits per day (a
+# small bounding box costs 1 credit per query). Calls are capped at
+# OPENSKY_DAY per day via a persistent counter.
+
+PT_OSKY_USAGE="$PT_HOME/opensky.usage"
+
+opensky_allow() {
+    OSKY_DKEY="$(date +%Y-%m-%d)"
+    ODAY=""; ODC=""
+    if [ -f "$PT_OSKY_USAGE" ]; then
+        read -r ODAY ODC < "$PT_OSKY_USAGE" 2>/dev/null
+    fi
+    [ "$ODAY" = "$OSKY_DKEY" ] || ODC=0
+    case "$ODC" in ''|*[!0-9]*) ODC=0;; esac
+    if [ "$ODC" -ge "$OPENSKY_DAY" ]; then
+        log "opensky budget reached ($ODC/$OPENSKY_DAY today)"
+        return 1
+    fi
+    return 0
+}
+
+opensky_count() {
+    echo "$OSKY_DKEY $(( ODC + 1 ))" > "$PT_OSKY_USAGE" 2>/dev/null
+}
+
+# opensky_positions LAT0 LON0 OUT - bounding-box query around the airport.
+opensky_positions() {
+    [ "$OPENSKY_DAY" -gt 0 ] || return 1
+    opensky_allow || return 1
+    CURLBIN="$(pt_curl_bin)" || return 1
+    R=$(( RANGE * 2 ))
+    [ $R -lt 60 ]  && R=60
+    [ $R -gt 250 ] && R=250
+    BBOX="$(awk -v la="$1" -v lo="$2" -v r="$R" 'BEGIN {
+        dla = r / 60.0
+        c = cos(la * 3.141592653589793 / 180); if (c < 0.1) c = 0.1
+        dlo = r / (60.0 * c)
+        printf "lamin=%.4f&lomin=%.4f&lamax=%.4f&lomax=%.4f", \
+            la - dla, lo - dlo, la + dla, lo + dlo }')"
+    if "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
+        -A "PaperTerminal/$PT_VERSION" -o "$PT_TMP.osky" \
+        "$OPENSKY_BASE/states/all?$BBOX" 2>/dev/null \
+       && grep -q '"states"' "$PT_TMP.osky"; then
+        awk -v LA="$1" -v LO="$2" "$PT_AWK_OPENSKY" "$PT_TMP.osky" > "$3"
+        rm -f "$PT_TMP.osky"
+        opensky_count
+        return 0
+    fi
+    rm -f "$PT_TMP.osky"
+    log "opensky source failed"
+    return 1
+}
+
+# src_positions OUT - live positions near AIRPORT as CS|DX|DY lines.
+# Sources: the re-api aggregators (adsb.fi, adsb.lol) first, then the
+# OpenSky Network. Results are cached for 10 seconds - the anonymous
+# OpenSky data resolution, and a courtesy to all the open aggregators.
 src_positions() {
     OUTPOS="$1"
     : > "$OUTPOS"
     coords="$(apt_coords "$AIRPORT")" || { log "no coords for $AIRPORT (data/airports.txt)"; return 1; }
     CURLBIN="$(pt_curl_bin)" || { log "adsb needs lib/curl"; return 1; }
     set -- $coords
+
+    mkdir -p "$PT_CACHE_DIR" 2>/dev/null
+    PC="$PT_CACHE_DIR/$AIRPORT.pos"
+    pts="$(cat "$PC.t" 2>/dev/null)"
+    case "$pts" in ''|*[!0-9]*) pts=0 ;; esac
+    if [ -s "$PC" ] && [ $(( $(date +%s) - pts )) -lt 10 ]; then
+        cp "$PC" "$OUTPOS"
+        return 0
+    fi
+
     R=$(( RANGE * 2 ))
     [ $R -lt 60 ]  && R=60
     [ $R -gt 250 ] && R=250
@@ -460,10 +580,16 @@ src_positions() {
             awk -v LA="$1" -v LO="$2" \
                 "$PT_AWK_JSON $PT_AWK_SCAN $PT_AWK_ADSB" "$PT_TMP.adsb" > "$OUTPOS"
             rm -f "$PT_TMP.adsb"
+            cp "$OUTPOS" "$PC" 2>/dev/null && date +%s > "$PC.t"
             return 0
         fi
         log "adsb source failed: $base"
     done
     rm -f "$PT_TMP.adsb"
+
+    if opensky_positions "$1" "$2" "$OUTPOS"; then
+        cp "$OUTPOS" "$PC" 2>/dev/null && date +%s > "$PC.t"
+        return 0
+    fi
     return 1
 }

@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="3.3.0"
+PT_VERSION="3.4.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -83,6 +83,8 @@ load_conf() {
     AERO_MONTH="$(cfg AERO_MONTH)"
     case "$AERO_MONTH" in ''|*[!0-9]*) AERO_MONTH=190;; esac
     ADSB_URLS="$(cfg ADSB_URLS)"
+    OPENSKY_DAY="$(cfg OPENSKY_DAY)"
+    case "$OPENSKY_DAY" in ''|*[!0-9]*) OPENSKY_DAY=300;; esac
     KEY_MENU="$(cfg KEY_MENU)"; case "$KEY_MENU" in ''|*[!0-9]*) KEY_MENU=139;; esac
     KEY_BACK="$(cfg KEY_BACK)"; case "$KEY_BACK" in ''|*[!0-9]*) KEY_BACK=158;; esac
     KEY_HOME="$(cfg KEY_HOME)"; case "$KEY_HOME" in ''|*[!0-9]*) KEY_HOME=102;; esac
@@ -117,6 +119,10 @@ save_conf() {
 #            spent, backup sources or clearly-marked stale data are shown.
 # ADSB_URLS: space-separated ADS-B API bases for the traffic map, tried
 #            in order. Empty = built-in default (adsb.fi, then adsb.lol).
+# OPENSKY_DAY: max anonymous OpenSky Network queries per day, used as the
+#            last position fallback when the ADS-B aggregators fail.
+#            Anonymous OpenSky allows ~400 credits/day; default 300
+#            keeps a margin. 0 disables OpenSky entirely.
 # KEY_*    : keycodes for on-device navigation (see the key test screen)
 AIRPORT=$AIRPORT
 SOURCE1=$SOURCE1
@@ -129,6 +135,7 @@ CACHE=$CACHE
 AERO_DAY=$AERO_DAY
 AERO_MONTH=$AERO_MONTH
 ADSB_URLS=$ADSB_URLS
+OPENSKY_DAY=$OPENSKY_DAY
 KEY_MENU=$KEY_MENU
 KEY_BACK=$KEY_BACK
 KEY_HOME=$KEY_HOME
@@ -151,6 +158,7 @@ save_conf_defaults() {
     AERO_DAY=6
     AERO_MONTH=190
     ADSB_URLS=""
+    OPENSKY_DAY=300
     KEY_MENU=139
     KEY_BACK=158
     KEY_HOME=102

@@ -2,6 +2,7 @@
 extensions/paperterminal/paperterminal.conf
 extensions/paperterminal/paperterminal.log
 extensions/paperterminal/aeroapi.usage
+extensions/paperterminal/opensky.usage
 __pycache__/
 
 # Cross-build working directory

@@ -166,6 +166,8 @@ RANGE=32           # live traffic map radius in nautical miles
 CACHE=300          # seconds to reuse fetched data (protects API quota)
 AERO_DAY=6         # AeroAPI budget: max queries per day...
 AERO_MONTH=190     # ...and per calendar month (free-tier fit)
+OPENSKY_DAY=300    # anonymous OpenSky queries/day (last position
+                   # fallback; ~400 allowed, 0 disables)
 KEY_MENU=139       # navigation keycodes - see the key test screen
 KEY_BACK=158
 KEY_HOME=102
@@ -199,9 +201,14 @@ scanner (no key-order or formatting assumptions):
   IATA aircraft types, no runway data. Works over plain HTTP, so it even
   functions without `lib/curl`.
 - **ADS-B positions** (no key): the traffic map asks adsb.fi (then
-  adsb.lol as fallback; order configurable via `ADSB_URLS`) for all
-  aircraft around the airport in one call, matches them to flights by
-  callsign, and plots east/north offsets computed in awk.
+  adsb.lol as fallback; order configurable via `ADSB_URLS`, and the
+  OpenSky Network as a last resort) for all aircraft around the airport
+  in one call, matches them to flights by callsign, and plots east/north
+  offsets computed in awk. Position results are cached for 10 seconds.
+  OpenSky's anonymous API allows roughly 400 credits per day at 10-second
+  data resolution, so its calls are capped client-side (`OPENSKY_DAY`,
+  default 300, persistent counter) — the same budget pattern used for
+  AeroAPI.
 
 Sources are tried in order until one delivers; the board footer notes
 when a backup source answered (`BACKUP SOURCE 2`). Responses are cached
