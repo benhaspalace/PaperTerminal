@@ -65,32 +65,25 @@ if [ -n "$CURLBIN" ]; then
         say 1 18 "  $(head -n 2 "$PT_TMP.err" | tr -d '\r\n' | cut -c8-52)"
         cat "$PT_TMP.err" >> "$PT_LOG" 2>/dev/null
     fi
-    # TLS cross-check with the bundled openssl CLI: if this works where
-    # curl reports out-of-memory, the problem is curl-specific; if both
-    # fail the same way, it's the environment (RAM/limits/network).
-    OSSL="$(pt_openssl_bin)"
-    if [ -n "$OSSL" ]; then
-        ( echo | "$OSSL" s_client -connect example.com:443 \
-            -CAfile "$PT_CACERT" -verify_return_error -quiet \
-            >/dev/null 2>"$PT_TMP.err" ) &
-        SCPID=$!
-        n=0
-        while kill -0 "$SCPID" 2>/dev/null; do
-            n=$(( n + 1 ))
-            [ $n -gt 12 ] && kill "$SCPID" 2>/dev/null
-            sleep 1
-        done
-        wait "$SCPID" 2>/dev/null
-        if [ $? -eq 0 ]; then
-            say 1 19 "  openssl s_client: OK (TLS CROSS-CHECK)"
-        else
-            say 1 19 "  openssl s_client: $(head -n 1 "$PT_TMP.err" | cut -c1-27)"
-            cat "$PT_TMP.err" >> "$PT_LOG" 2>/dev/null
-        fi
+    # Fallback transport: a full HTTPS GET spoken through the bundled
+    # openssl s_client. When curl malfunctions, all fetches use this
+    # path automatically - so this line is what actually matters.
+    if pt_fetch_ssl "https://example.com/" "$PT_TMP.sc"; then
+        say 1 19 "  s_client GET: OK (FALLBACK TRANSPORT WORKS)"
+    else
+        say 1 19 "  s_client GET: FAILED (SEE paperterminal.log)"
     fi
+    rm -f "$PT_TMP.sc"
+    # Record the deployed curl build in the log (mixed-version installs
+    # and resolver type are visible in its Features line).
+    "$CURLBIN" --version 2>/dev/null | head -n 4 >> "$PT_LOG"
     rm -f "$PT_TMP.err"
 else
     say 1 16 "  SKIPPED - NO RUNNABLE lib/curl"
+    if pt_fetch_ssl "https://example.com/" "$PT_TMP.sc"; then
+        say 1 17 "  s_client GET: OK (FALLBACK TRANSPORT)"
+    fi
+    rm -f "$PT_TMP.sc"
 fi
 
 say 1 20 "TEST 4: FLIGHT DATA SOURCES (EACH IN TURN)"

@@ -31,7 +31,7 @@ PT_RAMEVKEY="/var/tmp/paperterminal-evkey"
 PT_OPENSSL="$PT_LIB/openssl"
 PT_RAMOPENSSL="/var/tmp/paperterminal-openssl"
 
-PT_VERSION="4.0.4"
+PT_VERSION="4.0.5"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -281,28 +281,94 @@ pt_openssl_bin() {
     echo "$PT_RAMOPENSSL"
 }
 
-# pt_fetch <url> <outfile> - 0 on success. Prefers the bundled curl with
-# the bundled CA certificates (http and https alike); falls back to
-# busybox wget, which can only manage plain http.
-pt_fetch() {
+# pt_fetch_ssl <url> <outfile> [extra-header] - HTTPS GET spoken directly
+# through the bundled openssl s_client: a hand-written HTTP/1.0 request
+# (so the response is never chunked), verified against the CA bundle.
+# This is the fallback transport for devices where curl malfunctions
+# (the K3 reports 'out of memory' from curl while s_client works fine).
+pt_fetch_ssl() {
+    OSSL="$(pt_openssl_bin)" || return 1
+    case "$1" in https://*) ;; *) return 1 ;; esac
+    hostpath="${1#https://}"
+    host="${hostpath%%/*}"
+    path="/${hostpath#*/}"
+    [ "$path" = "/$hostpath" ] && path="/"
+    port=443
+    case "$host" in *:*) port="${host##*:}"; host="${host%%:*}" ;; esac
+
+    pt_lock
+    ( {
+        printf 'GET %s HTTP/1.0\r\n' "$path"
+        printf 'Host: %s\r\n' "$host"
+        printf 'User-Agent: PaperTerminal/%s\r\n' "$PT_VERSION"
+        printf 'Accept: */*\r\n'
+        [ -n "$3" ] && printf '%s\r\n' "$3"
+        printf '\r\n'
+      } | "$OSSL" s_client -connect "$host:$port" -servername "$host" \
+            -CAfile "$PT_CACERT" -verify_return_error -verify_quiet \
+            -quiet > "$2.raw" 2>>"$PT_LOG" ) &
+    _wp=$!
+    _n=0
+    while kill -0 "$_wp" 2>/dev/null; do
+        _n=$(( _n + 1 ))
+        [ $_n -gt 30 ] && kill "$_wp" 2>/dev/null
+        sleep 1
+    done
+    wait "$_wp" 2>/dev/null
+    pt_unlock
+
+    [ -s "$2.raw" ] || { rm -f "$2.raw"; return 1; }
+    read -r _status < "$2.raw"
+    case "$_status" in
+        *" 200 "*) ;;
+        *) log "s_client GET $host$path -> $_status"; rm -f "$2.raw"; return 1 ;;
+    esac
+    awk 'body { print; next } /^\r?$/ { body = 1 }' "$2.raw" > "$2"
+    rm -f "$2.raw"
+    [ -s "$2" ]
+}
+
+# pt_https_get <url> <outfile> [extra-header] - HTTPS transport with
+# failover: curl first (fast, does everything), s_client second (proven
+# to work on devices where curl breaks).
+pt_https_get() {
     CURLBIN="$(pt_curl_bin)"
     if [ -n "$CURLBIN" ]; then
-        # curl's stderr goes to the log so real failure reasons (DNS,
-        # TLS, timeouts) are diagnosable from paperterminal.log
+        pt_lock
+        if [ -n "$3" ]; then
+            "$CURLBIN" -sS --connect-timeout 10 -m 30 \
+                --cacert "$PT_CACERT" -A "PaperTerminal/$PT_VERSION" \
+                -H "$3" -o "$2" "$1" 2>>"$PT_LOG"
+        else
+            "$CURLBIN" -sS --connect-timeout 10 -m 30 \
+                --cacert "$PT_CACERT" -A "PaperTerminal/$PT_VERSION" \
+                -o "$2" "$1" 2>>"$PT_LOG"
+        fi
+        _rc=$?
+        pt_unlock
+        [ $_rc -eq 0 ] && [ -s "$2" ] && return 0
+        log "curl failed (rc=$_rc), trying s_client transport: $1"
+    fi
+    pt_fetch_ssl "$1" "$2" "$3"
+}
+
+# pt_fetch <url> <outfile> - 0 on success. https goes through
+# pt_https_get (curl, then s_client); plain http through curl, then
+# busybox wget.
+pt_fetch() {
+    case "$1" in
+        https://*) pt_https_get "$1" "$2"; return $? ;;
+    esac
+    CURLBIN="$(pt_curl_bin)"
+    if [ -n "$CURLBIN" ]; then
         pt_lock
         "$CURLBIN" -sS --connect-timeout 15 -m 40 \
-            --cacert "$PT_CACERT" -A "PaperTerminal/$PT_VERSION" \
+            -A "PaperTerminal/$PT_VERSION" \
             -o "$2" "$1" 2>>"$PT_LOG"
         _rc=$?
         pt_unlock
-        return $_rc
+        [ $_rc -eq 0 ] && return 0
     fi
-    case "$1" in
-        https://*)
-            log "https needs lib/curl (missing/unrunnable): $1"
-            return 1
-            ;;
-    esac
     # The K3 busybox wget has no timeout option, so babysit it ourselves
     # to keep a dead network from freezing the board for minutes.
     wget -q -O "$2" "$1" 2>/dev/null &
