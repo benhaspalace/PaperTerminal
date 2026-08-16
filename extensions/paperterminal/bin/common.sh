@@ -134,7 +134,7 @@ save_conf() {
 #            free tier allows ~100/month, default 90 keeps a margin.
 # ADSB_URLS: space-separated ADS-B API bases (the free adsb source and
 #            the traffic map), tried in order. Empty = built-in default
-#            (adsb.fi, then adsb.lol, then adsb.one).
+#            (adsb.fi -> adsb.lol -> adsb.one -> airplanes.live).
 # OPENSKY_DAY: max anonymous OpenSky Network queries per day, used as the
 #            last position fallback when the ADS-B aggregators fail.
 #            Anonymous OpenSky allows ~400 credits/day; default 300
