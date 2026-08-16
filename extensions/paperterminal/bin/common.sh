@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="3.2.1"
+PT_VERSION="3.3.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -71,7 +71,7 @@ load_conf() {
     [ "$ROWS" -gt 14 ] && ROWS=14
     [ "$ROWS" -lt 1 ]  && ROWS=1
     REFRESH="$(cfg REFRESH)"
-    case "$REFRESH" in ''|*[!0-9]*) REFRESH=0;; esac
+    case "$REFRESH" in ''|*[!0-9]*) REFRESH=5;; esac
     RANGE="$(cfg RANGE)"
     case "$RANGE" in ''|*[!0-9]*) RANGE=32;; esac
     [ "$RANGE" -gt 200 ] && RANGE=200
@@ -104,7 +104,10 @@ save_conf() {
 #              aviationstack  aviationstack.com (no runway data)
 # ROWS     : flights per board, 1..14; also the per-side count for the
 #            live traffic map (ROWS before + ROWS after now)
-# REFRESH  : auto-redraw interval in seconds, 0 = draw once
+# REFRESH  : board/map update interval in seconds (default 5), 0 = draw
+#            once. Updates re-read the cache and only repaint the e-ink
+#            when the content actually changed, so this does not burn
+#            API budget or flash the screen needlessly.
 # RANGE    : live traffic map radius in nautical miles, 8..200
 # CACHE    : seconds to reuse fetched data (protects your API quota)
 # AERO_DAY / AERO_MONTH : max AeroAPI queries per day / calendar month.
@@ -142,7 +145,7 @@ save_conf_defaults() {
     SOURCE2=""
     SOURCE3=""
     ROWS=12
-    REFRESH=0
+    REFRESH=5
     RANGE=32
     CACHE=300
     AERO_DAY=6

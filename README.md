@@ -50,6 +50,9 @@ in a small busybox-awk parser.
   and remembered
 - **Failover**: up to three data sources tried in order (e.g. AeroAPI
   first, aviationstack as backup), and multiple ADS-B sources for positions
+- Boards and map auto-update every 5 seconds (configurable), with change
+  detection so the e-ink only repaints when something actually changed —
+  the Kindle works as a set-and-forget wall display
 - Response caching on-device to protect your API quota
 - Bundled HTTPS stack: static curl 8.21 with OpenSSL 3.5 LTS inside and an
   up-to-date Mozilla CA root bundle, built for the K3's ARMv6 CPU and 2.6
@@ -125,6 +128,14 @@ navigate entirely on the device:
 | `P` | cycle the default airport through the presets |
 | any other key | redraw the current screen (re-fetches data) |
 
+Boards and the traffic map keep updating themselves every `REFRESH`
+seconds (default 5) while shown — data is re-read from the cache layer
+(so the API budget is untouched) and the screen only repaints when
+something actually changed. A keypress always interrupts the updater
+immediately. When a screen is auto-updating, the navigation session's
+idle timeout is extended from 10 minutes to 4 hours, so a board can run
+as a wall display.
+
 In the search screen, matches are ranked exact code → code prefix → city
 prefix → any substring, over the bundled 3,270-airport database. A code
 that isn't in the database can still be selected with Enter: it is looked
@@ -149,7 +160,8 @@ SOURCE1=aeroapi,YOUR_KEY         # tried first
 SOURCE2=aviationstack,YOUR_KEY   # optional backup source
 SOURCE3=                         # optional third source
 ROWS=12            # flights per board; per-side count on the map
-REFRESH=0          # standalone auto-redraw seconds (0 = draw once)
+REFRESH=5          # update interval in seconds (0 = draw once);
+                   # repaints only when the content changed
 RANGE=32           # live traffic map radius in nautical miles
 CACHE=300          # seconds to reuse fetched data (protects API quota)
 AERO_DAY=6         # AeroAPI budget: max queries per day...

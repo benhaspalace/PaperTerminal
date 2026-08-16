@@ -28,10 +28,12 @@ log "nav start: ${1:-menu}"
 PT_KEYPIPE="/tmp/paperterminal.keys"
 READER_PIDS=""
 WATCHDOG_PID=""
+SHOWPID=""
 
 cleanup() {
     [ -n "$READER_PIDS" ] && kill $READER_PIDS 2>/dev/null
     [ -n "$WATCHDOG_PID" ] && kill $WATCHDOG_PID 2>/dev/null
+    [ -n "$SHOWPID" ] && kill $SHOWPID 2>/dev/null
     rm -f "$PT_KEYPIPE"
 }
 trap cleanup EXIT
@@ -63,10 +65,13 @@ getkey() {
         }'
 }
 
-# 10 minutes without a keypress ends the session so no readers linger.
+# Idle watchdog: without keypresses the session ends so no readers
+# linger - after 10 minutes normally, or 4 hours when a screen is
+# auto-updating (so a board can serve as a wall display).
 arm_watchdog() {
     [ -n "$WATCHDOG_PID" ] && kill $WATCHDOG_PID 2>/dev/null
-    ( sleep 600; kill -TERM $$ 2>/dev/null ) &
+    if [ "$REFRESH" -gt 0 ]; then IDLE=14400; else IDLE=600; fi
+    ( sleep $IDLE; kill -TERM $$ 2>/dev/null ) &
     WATCHDOG_PID=$!
 }
 
@@ -238,11 +243,23 @@ cycle_airport() {
     save_conf
 }
 
+stop_refresher() {
+    [ -n "$SHOWPID" ] && kill $SHOWPID 2>/dev/null
+    SHOWPID=""
+}
+
 show() { # show <screen>
+    stop_refresher
     CUR="$1"
     case "$1" in
-        arr|dep|all) PT_ONCE=1 sh "$PT_BIN/board.sh" "$1" ;;
-        map)     PT_ONCE=1 sh "$PT_BIN/radar.sh" ;;
+        # Boards and the map run as background children so their REFRESH
+        # loop keeps updating the screen; any keypress kills the child.
+        arr|dep|all)
+            sh "$PT_BIN/board.sh" "$1" &
+            SHOWPID=$! ;;
+        map)
+            sh "$PT_BIN/radar.sh" &
+            SHOWPID=$! ;;
         rwy)     sh "$PT_BIN/runways.sh" ;;
         net)     sh "$PT_BIN/nettest.sh" ;;
         help)    sh "$PT_BIN/help.sh" ;;

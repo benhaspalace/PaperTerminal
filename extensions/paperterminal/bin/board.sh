@@ -113,14 +113,22 @@ draw_error() {
 get_feed
 if [ "$FEED_OK" = 1 ]; then draw_board; else draw_error; fi
 
-# Optional auto-refresh, bounded so KUAL never hangs forever. Skipped when
-# run from nav.sh (PT_ONCE=1), where keypresses drive redraws instead.
+# Auto-update loop: every REFRESH seconds re-read the (cached) data and
+# repaint ONLY when something changed - e-ink stays calm, API budget is
+# untouched. Bounded at ~10h so nothing runs forever. PT_ONCE=1 draws once.
+sig() { { cat "$PT_TMP" 2>/dev/null; echo "S:$FEED_OK:$PT_SRC_USED:$PT_SRC_STALE"; } > "$1"; }
+
 if [ "$REFRESH" -gt 0 ] && [ "$PT_ONCE" != "1" ]; then
+    sig "$PT_TMP.sig"
     i=0
-    while [ $i -lt 30 ]; do
+    while [ $i -lt 7200 ]; do
         sleep "$REFRESH"
         get_feed
-        if [ "$FEED_OK" = 1 ]; then draw_board; else draw_error; fi
+        sig "$PT_TMP.sig2"
+        if ! cmp -s "$PT_TMP.sig" "$PT_TMP.sig2" 2>/dev/null; then
+            if [ "$FEED_OK" = 1 ]; then draw_board; else draw_error; fi
+            mv "$PT_TMP.sig2" "$PT_TMP.sig"
+        fi
         i=$(( i + 1 ))
     done
 fi
