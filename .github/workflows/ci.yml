@@ -1,13 +1,17 @@
 name: CI
 
-# Runs on every pull request and push to main: POSIX syntax checks,
-# menu/config validation, and version consistency (config.xml and
-# common.sh must agree - the release workflow keys off that version).
+# Runs on pull requests only: POSIX syntax checks, menu/config
+# validation, and version consistency (config.xml and common.sh must
+# agree - the release workflow keys off that version). Pushes to main
+# are covered by the Release workflow, which re-runs the sanity checks
+# on whatever it packages, so only one workflow runs per event.
 
 on:
   pull_request:
-  push:
-    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
