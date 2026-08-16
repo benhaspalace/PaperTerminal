@@ -60,8 +60,8 @@ provides and costs.
   (OurAirports data), and unknown codes are looked up via AeroAPI once
   and remembered
 - **Failover**: up to three data sources tried in order (e.g. AeroAPI
-  first, aviationstack, then keyless adsb), and four keyless feeds behind
-  the adsb source (adsb.fi, adsb.lol, adsb.one, OpenSky)
+  first, aviationstack, then keyless adsb), and five keyless feeds behind
+  the adsb source (adsb.fi, adsb.lol, adsb.one, airplanes.live, OpenSky)
 - Boards and map auto-update every 5 seconds (configurable), with change
   detection so the e-ink only repaints when something actually changed —
   the Kindle works as a set-and-forget wall display
@@ -228,11 +228,12 @@ headings/10); airline names resolve from the ICAO callsign prefix via
 `data/airlines.txt`. Peculiarities to know: origin/destination is
 unknown (`FR/TO` shows `-`), flights not yet airborne don't appear, and
 callsigns can differ from marketed flight numbers (SWR4TH vs LX318).
-Data comes from adsb.fi, then adsb.lol, then adsb.one — all keyless and
-speaking the same readsb "re-api" (`ADSB_URLS` reorders or extends the
-list) — then OpenSky; raw responses are cached for 10 seconds. Needs the
-airport's coordinates in `data/airports.txt` (3,270 bundled) and
-`lib/curl`.
+Data comes from adsb.fi → adsb.lol → adsb.one → airplanes.live — all
+keyless and speaking the same readsb "re-api" (`ADSB_URLS` reorders or
+extends the list) — then OpenSky; raw responses are cached for 10
+seconds, comfortably within each aggregator's ~1 request/second
+politeness guidance. Needs the airport's coordinates in
+`data/airports.txt` (3,270 bundled) and `lib/curl`.
 
 ### `aeroapi` — FlightAware AeroAPI (`SOURCE1=aeroapi,KEY`)
 
@@ -261,7 +262,7 @@ departures are separate calls), so it fits best as a backup source.
 
 ### OpenSky Network — built-in last resort, keyless
 
-Used automatically (never configured as a SOURCE) when all three ADS-B
+Used automatically (never configured as a SOURCE) when all four ADS-B
 aggregators are unreachable: positions for the traffic map and the same
 derived board, from `/states/all` with a bounding box around the
 airport. Anonymous peculiarities are respected: ~400 credits/day

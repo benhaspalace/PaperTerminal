@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="4.0.0"
+PT_VERSION="4.0.1"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -134,7 +134,7 @@ save_conf() {
 #            free tier allows ~100/month, default 90 keeps a margin.
 # ADSB_URLS: space-separated ADS-B API bases (the free adsb source and
 #            the traffic map), tried in order. Empty = built-in default
-#            (adsb.fi, then adsb.lol, then adsb.one).
+#            (adsb.fi -> adsb.lol -> adsb.one -> airplanes.live).
 # OPENSKY_DAY: max anonymous OpenSky Network queries per day, used as the
 #            last position fallback when the ADS-B aggregators fail.
 #            Anonymous OpenSky allows ~400 credits/day; default 300

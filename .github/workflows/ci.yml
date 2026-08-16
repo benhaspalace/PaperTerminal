@@ -1,0 +1,46 @@
+name: CI
+
+# Runs on every pull request and push to main: POSIX syntax checks,
+# menu/config validation, and version consistency (config.xml and
+# common.sh must agree - the release workflow keys off that version).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: POSIX syntax check all shell scripts
+        run: |
+          for f in extensions/paperterminal/bin/*.sh build/*.sh; do
+            sh -n "$f" && echo "OK: $f"
+          done
+
+      - name: Validate menu.json, config.xml, and data files
+        run: |
+          python3 -c "import json; json.load(open('extensions/paperterminal/menu.json'))"
+          python3 -c "import xml.dom.minidom as m; m.parse('extensions/paperterminal/config.xml')"
+          python3 -m py_compile build/update-airports.py
+          awk -F'|' '!/^#/ && NF && NF < 6 {bad++} END {exit bad > 0}' \
+            extensions/paperterminal/data/airports.txt
+          echo "airports.txt shape ok"
+
+      - name: Version consistency (config.xml vs common.sh)
+        run: |
+          XMLVER="$(grep -o '<version>[^<]*' extensions/paperterminal/config.xml | cut -d'>' -f2)"
+          SHVER="$(sed -n 's/^PT_VERSION="\(.*\)"/\1/p' extensions/paperterminal/bin/common.sh)"
+          echo "config.xml=$XMLVER common.sh=$SHVER"
+          test "$XMLVER" = "$SHVER"
+
+      - name: Bundled binaries match SHA256SUMS
+        run: |
+          cd extensions/paperterminal/lib
+          sha256sum -c SHA256SUMS

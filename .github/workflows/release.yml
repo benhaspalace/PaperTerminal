@@ -1,21 +1,27 @@
 name: Release
 
-# Packages the KUAL extension into a zip that unzips directly onto the
-# Kindle's USB drive (it contains extensions/paperterminal/...) and
-# publishes it as a GitHub Release.
+# Publishes the ready-to-copy extension zip as a GitHub Release.
 #
-# Trigger by pushing a tag like v3.0.0, or run it manually from the
-# Actions tab with a tag name (the tag is created on the current commit
-# if it doesn't exist yet).
+# Triggers:
+#   - every push to main (e.g. a merged pull request): if no release
+#     exists yet for the version in config.xml, one is created
+#     automatically, tag included. Merging a version bump is all it
+#     takes to cut a release.
+#   - pushing a tag like v4.0.0 manually.
+#   - manual run from the Actions tab (tag input optional; defaults to
+#     the version in config.xml). Re-running for an existing release
+#     refreshes its assets.
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, e.g. v3.0.0 (must match config.xml)"
-        required: true
+        description: "Release tag (optional; default v<config.xml version>)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -23,47 +29,71 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Determine tag and version
+      - name: Determine version, tag, and whether to publish
         id: meta
         run: |
-          TAG="${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
+          XMLVER="$(grep -o '<version>[^<]*' extensions/paperterminal/config.xml | cut -d'>' -f2)"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="v$XMLVER"
+          fi
           VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$XMLVER" != "$VERSION" ]; then
+            echo "Tag $TAG does not match config.xml version $XMLVER" >&2
+            exit 1
+          fi
+          PROCEED=true
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" != "tag" ]; then
+              # Routine merge without a version bump - nothing to do.
+              echo "Release $TAG already exists; bump the version in" \
+                   "config.xml (and bin/common.sh) to cut a new release."
+              PROCEED=false
+            fi
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "proceed=$PROCEED"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Check extension is sane and matches the tag
+      - name: Check the extension is sane
+        if: steps.meta.outputs.proceed == 'true'
         run: |
           for f in extensions/paperterminal/bin/*.sh; do sh -n "$f"; done
           python3 -c "import json; json.load(open('extensions/paperterminal/menu.json'))"
           python3 -c "import xml.dom.minidom as m; m.parse('extensions/paperterminal/config.xml')"
-          XMLVER="$(grep -o '<version>[^<]*' extensions/paperterminal/config.xml | cut -d'>' -f2)"
-          if [ "$XMLVER" != "${{ steps.meta.outputs.version }}" ]; then
-            echo "config.xml version ($XMLVER) does not match tag (${{ steps.meta.outputs.version }})" >&2
-            exit 1
-          fi
 
       - name: Build release zip
+        if: steps.meta.outputs.proceed == 'true'
         run: |
           mkdir -p dist/extensions
           cp -r extensions/paperterminal dist/extensions/
           cd dist
-          zip -r -X "paperterminal-${{ steps.meta.outputs.version }}.zip" extensions
+          zip -q -r -X "paperterminal-${{ steps.meta.outputs.version }}.zip" extensions
           sha256sum "paperterminal-${{ steps.meta.outputs.version }}.zip" > \
             "paperterminal-${{ steps.meta.outputs.version }}.zip.sha256"
-          unzip -l "paperterminal-${{ steps.meta.outputs.version }}.zip" | tail -5
+          unzip -l "paperterminal-${{ steps.meta.outputs.version }}.zip" | tail -3
 
       - name: Write release notes
+        if: steps.meta.outputs.proceed == 'true'
         run: |
           V="${{ steps.meta.outputs.version }}"
           cat > notes.md <<EOF
           # PaperTerminal $V
 
           Airport arrival/departure board for the jailbroken Kindle 3
-          Keyboard (KUAL extension). Talks directly to public flight APIs
-          via a bundled static curl/OpenSSL - no proxy needed.
+          Keyboard (KUAL extension). Works out of the box with free,
+          keyless ADS-B data; optional API keys add true schedules and
+          runway data. Bundled static curl/OpenSSL - no proxy needed.
 
           ## Install
 
@@ -71,22 +101,18 @@ jobs:
           2. Plug the Kindle in over USB and unzip the archive onto the
              Kindle's USB drive root - it contains
              \`extensions/paperterminal/...\` and merges into any existing
-             \`extensions\` folder. (Or unzip anywhere and copy the inner
-             \`paperterminal\` folder into the Kindle's \`extensions\`
-             folder.)
-          3. Put your API key in
-             \`extensions/paperterminal/paperterminal.conf\`:
-             \`SOURCE1=aeroapi,YOUR_KEY\` (or \`aviationstack,YOUR_KEY\`).
-          4. Eject, open KUAL, pick **PaperTerminal Flight Board**, and run
-             the network self-test first.
+             \`extensions\` folder.
+          3. Eject, open KUAL, pick **PaperTerminal Flight Board** - it
+             works immediately, no API key needed. Run the network
+             self-test first to check each layer.
 
           Requires a jailbroken Kindle 3 with the KUAL kindlet installed -
-          see the README for details.
+          see the README for details, including optional API keys for
+          schedule data.
           EOF
 
-      - name: Create release and upload assets
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Create release or refresh its assets
+        if: steps.meta.outputs.proceed == 'true'
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

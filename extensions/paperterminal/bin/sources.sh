@@ -7,11 +7,11 @@
 #   SOURCE2=aviationstack,YOUR_KEY  aviationstack (no runway data)
 #
 # Live positions for the traffic map come straight from open ADS-B
-# aggregators (adsb.fi, then adsb.lol, then adsb.one - all speak the
-# same readsb re-api - with the OpenSky Network as a last resort) - no
-# key needed. OpenSky's anonymous API is limited (~400 credits/day, 10 s
-# data resolution), so its calls are budgeted (OPENSKY_DAY) and all raw
-# responses are cached for 10 s.
+# aggregators (adsb.fi -> adsb.lol -> adsb.one -> airplanes.live, all
+# speaking the same readsb re-api, with the OpenSky Network as a last
+# resort) - no key needed. OpenSky's anonymous API is limited (~400
+# credits/day, 10 s data resolution), so its calls are budgeted
+# (OPENSKY_DAY) and all raw responses are cached for 10 s.
 #
 # All JSON is parsed on-device by a small awk object scanner that tracks
 # brace depth and string state, so it does not depend on key order or
@@ -23,7 +23,7 @@ PT_CACHE_DIR="/tmp/paperterminal.cache"
 
 AEROAPI_BASE="${PT_AEROAPI_BASE:-https://aeroapi.flightaware.com/aeroapi}"
 AVSTACK_BASE="${PT_AVSTACK_BASE:-http://api.aviationstack.com/v1}"
-ADSB_DEFAULT="https://opendata.adsb.fi/api/v2 https://api.adsb.lol/v2 https://api.adsb.one/v2"
+ADSB_DEFAULT="https://opendata.adsb.fi/api/v2 https://api.adsb.lol/v2 https://api.adsb.one/v2 https://api.airplanes.live/v2"
 OPENSKY_BASE="${PT_OPENSKY_BASE:-https://opensky-network.org/api}"
 
 # --------------------------------------------------------------- time ------
