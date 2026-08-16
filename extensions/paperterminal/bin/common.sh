@@ -31,7 +31,7 @@ PT_RAMEVKEY="/var/tmp/paperterminal-evkey"
 PT_OPENSSL="$PT_LIB/openssl"
 PT_RAMOPENSSL="/var/tmp/paperterminal-openssl"
 
-PT_VERSION="4.0.3"
+PT_VERSION="4.0.4"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid

@@ -107,10 +107,15 @@ build_openssl() {
 build_curl() {
     echo "== building curl $CURL_VERSION (static, http/https only)"
     cd "$WORK/curl-$CURL_VERSION"
+    # --disable-threaded-resolver: the Kindle's environment cannot spawn
+    # resolver threads (curl reports it as 'Out of memory'); blocking DNS
+    # is what works there. --disable-ipv6: the K3's 2.6 kernel + v4-only
+    # networks make IPv6 lookups pure risk.
     ./configure --host=arm-buildroot-linux-musleabi \
         --with-openssl="$WORK/sslout" \
         --with-ca-bundle=/mnt/us/extensions/paperterminal/lib/cacert.pem \
         --disable-shared --enable-static \
+        --disable-threaded-resolver --disable-ipv6 \
         --disable-ldap --disable-ldaps --disable-rtsp --disable-dict \
         --disable-telnet --disable-tftp --disable-pop3 --disable-imap \
         --disable-smb --disable-smtp --disable-gopher --disable-mqtt \
