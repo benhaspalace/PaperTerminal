@@ -6,8 +6,10 @@ is far too old for today's HTTPS. They are statically linked (musl libc),
 so they run with no dependency on anything in the Kindle firmware.
 
 curl        curl 8.21.0 with OpenSSL 3.5.7 (LTS) linked in statically.
-            Protocols restricted to http/https (+ws/wss). Default CA
-            bundle path baked in: /mnt/us/extensions/paperterminal/lib/cacert.pem
+            Protocols restricted to http/https (+ws/wss). Blocking DNS
+            resolver (the Kindle's environment cannot spawn resolver
+            threads) and IPv4 only. Default CA bundle path baked in:
+            /mnt/us/extensions/paperterminal/lib/cacert.pem
 openssl     OpenSSL 3.5.7 command-line tool (s_client etc. for debugging).
             OPENSSLDIR: /mnt/us/extensions/paperterminal/lib/ssl
 cacert.pem  Mozilla CA root certificate bundle as published by the curl

@@ -320,13 +320,20 @@ show() { # show <screen>
 
 SCREEN="${1:-menu}"
 
+# Start capturing keys FIRST: the initial screen draw can take a while
+# (network fetches), and keypresses during it would otherwise go only to
+# the Kindle framework, which repaints its own UI over ours. Captured
+# keys are processed as soon as the draw finishes and win the screen back.
+INPUT_OK=1
+start_input || INPUT_OK=0
+
 # Let KUAL/the framework finish repainting before the first draw, so the
 # board isn't immediately painted over.
 sleep 2
 
 show "$SCREEN"
 
-if ! start_input; then
+if [ "$INPUT_OK" != 1 ]; then
     log "no readable input devices - drew once, exiting"
     exit 0
 fi
