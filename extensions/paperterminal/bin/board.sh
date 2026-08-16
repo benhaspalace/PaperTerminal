@@ -74,7 +74,12 @@ draw_board() {
     [ $count -eq 0 ] && say 1 10 "NO FLIGHTS REPORTED FOR $AIRPORT RIGHT NOW"
 
     SRC="LIVE $AIRPORT"
-    [ "$PT_SRC_USED" -gt 1 ] && SRC="LIVE $AIRPORT (BACKUP SOURCE $PT_SRC_USED)"
+    stype=""
+    [ "$PT_SRC_USED" -ge 1 ] && eval "stype=\$SOURCE$PT_SRC_USED"
+    case "${stype%%,*}" in
+        adsb) SRC="LIVE AIR $AIRPORT (ADS-B EST.)" ;;
+    esac
+    [ "$PT_SRC_USED" -gt 1 ] && SRC="$SRC [SRC$PT_SRC_USED]"
     [ "$PT_SRC_STALE" -gt 0 ] && SRC="$AIRPORT - DATA ${PT_SRC_STALE}MIN OLD"
     draw_footer "$SRC"
 }
@@ -100,8 +105,10 @@ draw_error() {
     say 1 $row "  CHECK:"; row=$(( row + 1 ))
     say 1 $row "  - WI-FI IS CONNECTED (3G ONLY REACHES"; row=$(( row + 1 ))
     say 1 $row "    AMAZON, NOT THE FLIGHT APIS)"; row=$(( row + 1 ))
-    say 1 $row "  - YOUR API KEY IS SET IN SOURCE1= IN"; row=$(( row + 1 ))
-    say 1 $row "    paperterminal.conf (EDIT OVER USB)"; row=$(( row + 2 ))
+    say 1 $row "  - FREE MODE (adsb) NEEDS lib/ COPIED"; row=$(( row + 1 ))
+    say 1 $row "    AND $AIRPORT IN data/airports.txt"; row=$(( row + 1 ))
+    say 1 $row "  - KEYED SOURCES NEED VALID API KEYS"; row=$(( row + 1 ))
+    say 1 $row "    IN paperterminal.conf (EDIT OVER USB)"; row=$(( row + 2 ))
     say 1 $row "  RUN THE NETWORK SELF-TEST (KUAL OR THE"; row=$(( row + 1 ))
     say 1 $row "  N KEY IN THE MENU) TO PINPOINT IT."; row=$(( row + 2 ))
     say 1 $row "  DETAILS: paperterminal.log"

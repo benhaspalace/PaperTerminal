@@ -17,10 +17,10 @@ mask_src() { # mask_src <spec> - never print API keys on screen
     [ -n "$1" ] || { echo "-"; return; }
     t="${1%%,*}"
     k="${1#*,}"
-    if [ "$k" = "$1" ] || [ -z "$k" ]; then
+    if [ "$t" = "adsb" ]; then
+        echo "adsb (FREE, NO KEY NEEDED)"
+    elif [ "$k" = "$1" ] || [ -z "$k" ]; then
         echo "$t (NO KEY SET)"
-    elif [ "$k" = "PUT_YOUR_KEY_HERE" ]; then
-        echo "$t (PUT YOUR KEY IN THE CONF)"
     else
         echo "$t (KEY $(printf '%.4s' "$k")***)"
     fi

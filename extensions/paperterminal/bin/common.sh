@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="3.4.0"
+PT_VERSION="4.0.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -65,7 +65,9 @@ load_conf() {
     SOURCE1="$(cfg SOURCE1)"
     SOURCE2="$(cfg SOURCE2)"
     SOURCE3="$(cfg SOURCE3)"
-    [ -n "$SOURCE1$SOURCE2$SOURCE3" ] || SOURCE1="aeroapi,PUT_YOUR_KEY_HERE"
+    # Keyed APIs are used only when explicitly configured; out of the box
+    # everything runs on the free keyless ADS-B chain.
+    [ -n "$SOURCE1$SOURCE2$SOURCE3" ] || SOURCE1="adsb"
     ROWS="$(cfg ROWS)"
     case "$ROWS" in ''|*[!0-9]*) ROWS=12;; esac
     [ "$ROWS" -gt 14 ] && ROWS=14
@@ -82,6 +84,8 @@ load_conf() {
     case "$AERO_DAY" in ''|*[!0-9]*) AERO_DAY=6;; esac
     AERO_MONTH="$(cfg AERO_MONTH)"
     case "$AERO_MONTH" in ''|*[!0-9]*) AERO_MONTH=190;; esac
+    AVSTACK_MONTH="$(cfg AVSTACK_MONTH)"
+    case "$AVSTACK_MONTH" in ''|*[!0-9]*) AVSTACK_MONTH=90;; esac
     ADSB_URLS="$(cfg ADSB_URLS)"
     OPENSKY_DAY="$(cfg OPENSKY_DAY)"
     case "$OPENSKY_DAY" in ''|*[!0-9]*) OPENSKY_DAY=300;; esac
@@ -100,10 +104,19 @@ save_conf() {
 # PaperTerminal settings - safe to edit over USB.
 # AIRPORT  : default airport code (IATA like ZRH; ICAO like LSZH also works
 #            for AeroAPI; add coordinates to data/airports.txt for the map)
-# SOURCE1-3: public flight-data APIs, tried in order until one answers.
-#            Format TYPE,APIKEY with TYPE one of:
-#              aeroapi        FlightAware AeroAPI (runway data; needs lib/curl)
-#              aviationstack  aviationstack.com (no runway data)
+# SOURCE1-3: flight-data sources, tried in order until one answers.
+#            TYPE or TYPE,APIKEY with TYPE one of:
+#              adsb           FREE, no key (the default): live board derived
+#                             from ADS-B (adsb.fi -> adsb.lol -> OpenSky).
+#                             Times are estimates, FR/TO unknown, runway
+#                             estimated from final-approach heading.
+#              aeroapi        FlightAware AeroAPI, key required: true
+#                             schedules, origins/destinations, actual
+#                             runway used (needs lib/curl; budgeted, see
+#                             AERO_DAY/AERO_MONTH)
+#              aviationstack  aviationstack.com, key required: schedules
+#                             and airline names, no runway (plain http;
+#                             budgeted, see AVSTACK_MONTH)
 # ROWS     : flights per board, 1..14; also the per-side count for the
 #            live traffic map (ROWS before + ROWS after now)
 # REFRESH  : board/map update interval in seconds (default 5), 0 = draw
@@ -117,8 +130,11 @@ save_conf() {
 #            USD 0.025 per airport-flights query (~200/month); defaults
 #            6/day and 190/month keep a safety margin. When the budget is
 #            spent, backup sources or clearly-marked stale data are shown.
-# ADSB_URLS: space-separated ADS-B API bases for the traffic map, tried
-#            in order. Empty = built-in default (adsb.fi, then adsb.lol).
+# AVSTACK_MONTH : max aviationstack requests per calendar month; their
+#            free tier allows ~100/month, default 90 keeps a margin.
+# ADSB_URLS: space-separated ADS-B API bases (the free adsb source and
+#            the traffic map), tried in order. Empty = built-in default
+#            (adsb.fi, then adsb.lol, then adsb.one).
 # OPENSKY_DAY: max anonymous OpenSky Network queries per day, used as the
 #            last position fallback when the ADS-B aggregators fail.
 #            Anonymous OpenSky allows ~400 credits/day; default 300
@@ -134,6 +150,7 @@ RANGE=$RANGE
 CACHE=$CACHE
 AERO_DAY=$AERO_DAY
 AERO_MONTH=$AERO_MONTH
+AVSTACK_MONTH=$AVSTACK_MONTH
 ADSB_URLS=$ADSB_URLS
 OPENSKY_DAY=$OPENSKY_DAY
 KEY_MENU=$KEY_MENU
@@ -148,7 +165,7 @@ EOF
 
 save_conf_defaults() {
     AIRPORT="ZRH"
-    SOURCE1="aeroapi,PUT_YOUR_KEY_HERE"
+    SOURCE1="adsb"
     SOURCE2=""
     SOURCE3=""
     ROWS=12
@@ -157,6 +174,7 @@ save_conf_defaults() {
     CACHE=300
     AERO_DAY=6
     AERO_MONTH=190
+    AVSTACK_MONTH=90
     ADSB_URLS=""
     OPENSKY_DAY=300
     KEY_MENU=139

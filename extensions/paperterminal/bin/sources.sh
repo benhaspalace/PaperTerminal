@@ -7,10 +7,11 @@
 #   SOURCE2=aviationstack,YOUR_KEY  aviationstack (no runway data)
 #
 # Live positions for the traffic map come straight from open ADS-B
-# aggregators (adsb.fi first, adsb.lol as fallback, then the OpenSky
-# Network as a last resort) - no key needed. OpenSky's anonymous API is
-# limited (~400 credits/day, 10 s data resolution), so its calls are
-# budgeted (OPENSKY_DAY) and all position results are cached for 10 s.
+# aggregators (adsb.fi, then adsb.lol, then adsb.one - all speak the
+# same readsb re-api - with the OpenSky Network as a last resort) - no
+# key needed. OpenSky's anonymous API is limited (~400 credits/day, 10 s
+# data resolution), so its calls are budgeted (OPENSKY_DAY) and all raw
+# responses are cached for 10 s.
 #
 # All JSON is parsed on-device by a small awk object scanner that tracks
 # brace depth and string state, so it does not depend on key order or
@@ -22,7 +23,7 @@ PT_CACHE_DIR="/tmp/paperterminal.cache"
 
 AEROAPI_BASE="${PT_AEROAPI_BASE:-https://aeroapi.flightaware.com/aeroapi}"
 AVSTACK_BASE="${PT_AVSTACK_BASE:-http://api.aviationstack.com/v1}"
-ADSB_DEFAULT="https://opendata.adsb.fi/api/v2 https://api.adsb.lol/v2"
+ADSB_DEFAULT="https://opendata.adsb.fi/api/v2 https://api.adsb.lol/v2 https://api.adsb.one/v2"
 OPENSKY_BASE="${PT_OPENSKY_BASE:-https://opensky-network.org/api}"
 
 # --------------------------------------------------------------- time ------
@@ -167,6 +168,12 @@ END {
 }
 '
 
+# Loader rule for the ICAO-callsign-prefix airline map (nmi[]); pass
+# data/airlines.txt as the FIRST file, ahead of the JSON payload.
+PT_AWK_NMI='
+NR == FNR { if ($0 !~ /^#/) { split($0, aa, "|"); if (aa[2] != "") nmi[aa[2]] = aa[3] } next }
+'
+
 # Group-aware scanner for AeroAPI's combined /flights response: the root
 # object holds four arrays (arrivals, scheduled_arrivals, departures,
 # scheduled_departures); the current array key is tracked so one billed
@@ -299,10 +306,135 @@ function emit(o,   cs, la, lo, dx, dy) {
 }
 '
 
-# Windowing/dedupe/format: raw sorted lines ->
-# DIR|HH:MM|FLIGHT|AIRLINE|TYPE|RWY|APT|DX|DY|CALLSIGN (DX/DY empty here)
+# The FREE keyless board: derive arrivals/departures from live ADS-B.
+# Geometry decides direction (track vs bearing to the airport), times are
+# distance/groundspeed estimates, and on low final/climbout the runway is
+# estimated from the track (runway numbers are headings / 10). Airline
+# names resolve from the ICAO callsign prefix. FR/TO stays unknown ("-").
+PT_AWK_ADSB_BOARD='
+function rnd(x) { return x >= 0 ? int(x + 0.5) : -int(-x + 0.5) }
+function emit(o,   cs, la, lo, gs, tr, ab, dx, dy, dist, brg, d, tag, mn, rw, al, ty) {
+    if (jstr(o, "alt_baro") == "ground") return
+    cs = jstr(o, "flight"); gsub(/^ +/, "", cs); gsub(/ +$/, "", cs)
+    if (cs == "") return
+    la = jnum(o, "lat"); lo = jnum(o, "lon")
+    gs = jnum(o, "gs");  tr = jnum(o, "track")
+    ab = jnum(o, "alt_baro")
+    if (la == "" || lo == "" || gs == "" || tr == "" || gs < 50) return
+    dy = (la - LA) * 60
+    dx = (lo - LO) * 60 * cos(LA * 3.141592653589793 / 180)
+    dist = sqrt(dx * dx + dy * dy)
+    if (dist < 0.5) return
+    brg = atan2(-dx, -dy) * 57.29577951308232
+    if (brg < 0) brg += 360
+    d = tr - brg
+    while (d > 180) d -= 360
+    while (d < -180) d += 360
+    if (d < 0) d = -d
+    if (d < 70) tag = "A"
+    else if (d > 110) tag = "D"
+    else return
+    if (DIRQ == "arr" && tag != "A") return
+    if (DIRQ == "dep" && tag != "D") return
+    mn = dist / gs * 60
+    if (mn > 240) return
+    mn = (tag == "A") ? NOW + rnd(mn) : NOW - rnd(mn)
+    rw = "-"
+    if (ab != "" && ab < 5000 && dist < 12) {
+        rw = int((tr + 5) / 10) % 36
+        if (rw == 0) rw = 36
+        rw = sprintf("%02d", rw)
+    }
+    if (match(cs, /^[A-Z]+/)) al = substr(cs, 1, RLENGTH); else al = cs
+    if (al in nmi) al = nmi[al]
+    ty = jstr(o, "t"); if (ty == "") ty = "-"
+    printf "%09d|%s|%s|%s|%s|%s|-|%s|%d|%d\n", \
+        mn, tag, cs, al, ty, rw, cs, rnd(dx), rnd(dy)
+}
+'
+
+# Same derivation from OpenSky state arrays (metric units: m, m/s).
+PT_AWK_OSKY_BOARD='
+function rnd(x) { return x >= 0 ? int(x + 0.5) : -int(-x + 0.5) }
+function state(s,   m, j, c2, el, k, cs, la, lo, gs, tr, ab, dx, dy, dist, brg, d, tag, mn, rw, al) {
+    k = 0; el = ""; ins2 = 0; esc2 = 0
+    m = length(s)
+    for (j = 1; j <= m; j++) {
+        c2 = substr(s, j, 1)
+        if (ins2) {
+            if (esc2) esc2 = 0
+            else if (c2 == "\\") esc2 = 1
+            else if (c2 == "\"") ins2 = 0
+            else el = el c2
+            continue
+        }
+        if (c2 == "\"") { ins2 = 1; continue }
+        if (c2 == ",") { k++; f[k] = el; el = ""; continue }
+        el = el c2
+    }
+    k++; f[k] = el
+    if (k < 12) return
+    if (f[9] ~ /true/) return
+    cs = f[2]; gsub(/^ +/, "", cs); gsub(/ +$/, "", cs)
+    if (cs == "" || f[6] !~ /[0-9]/ || f[7] !~ /[0-9]/) return
+    if (f[10] !~ /[0-9]/ || f[11] !~ /[0-9]/) return
+    lo = f[6] + 0; la = f[7] + 0
+    gs = f[10] * 1.94384
+    tr = f[11] + 0
+    ab = (f[8] ~ /[0-9]/) ? f[8] * 3.28084 : ""
+    if (gs < 50) return
+    dy = (la - LA) * 60
+    dx = (lo - LO) * 60 * cos(LA * 3.141592653589793 / 180)
+    dist = sqrt(dx * dx + dy * dy)
+    if (dist < 0.5) return
+    brg = atan2(-dx, -dy) * 57.29577951308232
+    if (brg < 0) brg += 360
+    d = tr - brg
+    while (d > 180) d -= 360
+    while (d < -180) d += 360
+    if (d < 0) d = -d
+    if (d < 70) tag = "A"
+    else if (d > 110) tag = "D"
+    else return
+    if (DIRQ == "arr" && tag != "A") return
+    if (DIRQ == "dep" && tag != "D") return
+    mn = dist / gs * 60
+    if (mn > 240) return
+    mn = (tag == "A") ? NOW + rnd(mn) : NOW - rnd(mn)
+    rw = "-"
+    if (ab != "" && ab < 5000 && dist < 12) {
+        rw = int((tr + 5) / 10) % 36
+        if (rw == 0) rw = 36
+        rw = sprintf("%02d", rw)
+    }
+    if (match(cs, /^[A-Z]+/)) al = substr(cs, 1, RLENGTH); else al = cs
+    if (al in nmi) al = nmi[al]
+    printf "%09d|%s|%s|%s|%s|%s|-|%s|%d|%d\n", \
+        mn, tag, cs, al, "-", rw, cs, rnd(dx), rnd(dy)
+}
+{ buf = buf $0 }
+END {
+    n = length(buf); adep = 0; ins = 0; esc = 0; st = 0
+    for (i = 1; i <= n; i++) {
+        c = substr(buf, i, 1)
+        if (ins) {
+            if (esc) esc = 0
+            else if (c == "\\") esc = 1
+            else if (c == "\"") ins = 0
+            continue
+        }
+        if (c == "\"") { ins = 1; continue }
+        if (c == "[") { adep++; if (adep == 2) st = i + 1; continue }
+        if (c == "]") { if (adep == 2 && st) state(substr(buf, st, i - st)); adep--; continue }
+    }
+}
+'
+
+# Windowing/dedupe/format: raw sorted lines
+# (MIN|DIR|FLIGHT|AIRLINE|TYPE|RWY|APT|CALLSIGN[|DX|DY]) ->
+# DIR|HH:MM|FLIGHT|AIRLINE|TYPE|RWY|APT|DX|DY|CALLSIGN
 PT_AWK_POST='
-NR == FNR { if ($0 !~ /^#/) nm[$1] = $2; next }
+NR == FNR { if ($0 !~ /^#/ && $1 != "") nm[$1] = $3; next }
 {
     key = $2 "|" $3
     if (seen[key]++) next
@@ -312,8 +444,8 @@ NR == FNR { if ($0 !~ /^#/) nm[$1] = $2; next }
     if (mn < lo || mn > hi) next
     al = $4; if (al in nm) al = nm[al]
     lm = (mn + TZ) % 1440; if (lm < 0) lm += 1440
-    line = sprintf("%s|%02d:%02d|%s|%s|%s|%s|%s|||%s", \
-        $2, int(lm / 60), lm % 60, $3, toupper(al), $5, $6, $7, $8)
+    line = sprintf("%s|%02d:%02d|%s|%s|%s|%s|%s|%s|%s|%s", \
+        $2, int(lm / 60), lm % 60, $3, toupper(al), $5, $6, $7, $9, $10, $8)
     if (WIN == "split") {
         if (mn < NOW) pa[++pn] = line
         else if (fn < LIM) fu[++fn] = line
@@ -376,6 +508,30 @@ src_aeroapi() { # KEY DIR WINDOW LIMIT OUT
     src_finish_raw "$RAW" "$3" "$4" "$5"
 }
 
+# ------------------------------------------------- aviationstack budget ----
+# The aviationstack free tier allows roughly 100 requests per month.
+
+PT_AVS_USAGE="$PT_HOME/avstack.usage"
+
+avstack_allow() {
+    AVS_MKEY="$(date +%Y-%m)"
+    AMON=""; AMC=""
+    if [ -f "$PT_AVS_USAGE" ]; then
+        read -r AMON AMC < "$PT_AVS_USAGE" 2>/dev/null
+    fi
+    [ "$AMON" = "$AVS_MKEY" ] || AMC=0
+    case "$AMC" in ''|*[!0-9]*) AMC=0;; esac
+    if [ "$AMC" -ge "$AVSTACK_MONTH" ]; then
+        log "aviationstack budget reached ($AMC/$AVSTACK_MONTH this month)"
+        return 1
+    fi
+    return 0
+}
+
+avstack_count() {
+    echo "$AVS_MKEY $(( AMC + 1 ))" > "$PT_AVS_USAGE" 2>/dev/null
+}
+
 src_avstack() { # KEY DIR WINDOW LIMIT OUT
     case "$2" in
         arr) SIDES="arr" ;;
@@ -389,12 +545,105 @@ src_avstack() { # KEY DIR WINDOW LIMIT OUT
         else
             TAG=D; SEG=departure; OTH=arrival; FK=dep_iata
         fi
+        avstack_allow || break
         pt_fetch "$AVSTACK_BASE/flights?access_key=$1&limit=100&$FK=$AIRPORT" \
             "$PT_TMP.json" || continue
+        avstack_count
         awk -v TAG=$TAG -v SEG=$SEG -v OTH=$OTH \
             "$PT_AWK_JSON $PT_AWK_SCAN $PT_AWK_AVSTACK" "$PT_TMP.json" >> "$RAW"
     done
     rm -f "$PT_TMP.json"
+    src_finish_raw "$RAW" "$3" "$4" "$5"
+}
+
+# ------------------------------------------------ keyless raw fetchers -----
+# Both hold a 10-second raw-response cache: polite to the aggregators,
+# matches OpenSky's anonymous data resolution, and lets the derived board
+# and the traffic map share one download.
+
+adsb_fetch_raw() { # LAT LON OUT
+    mkdir -p "$PT_CACHE_DIR" 2>/dev/null
+    RC="$PT_CACHE_DIR/$AIRPORT.adsb.json"
+    rts="$(cat "$RC.t" 2>/dev/null)"
+    case "$rts" in ''|*[!0-9]*) rts=0 ;; esac
+    if [ -s "$RC" ] && [ $(( $(date +%s) - rts )) -lt 10 ]; then
+        cp "$RC" "$3"
+        return 0
+    fi
+    CURLBIN="$(pt_curl_bin)" || return 1
+    R=$(( RANGE * 2 ))
+    [ $R -lt 60 ]  && R=60
+    [ $R -gt 250 ] && R=250
+    # Resolution order: test override, then the config file, then default.
+    for base in ${PT_ADSB_BASES:-${ADSB_URLS:-$ADSB_DEFAULT}}; do
+        if "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
+            -A "PaperTerminal/$PT_VERSION" -o "$3" \
+            "$base/point/$1/$2/$R" 2>/dev/null \
+           && grep -q '"ac"' "$3"; then
+            cp "$3" "$RC" 2>/dev/null && date +%s > "$RC.t"
+            return 0
+        fi
+        log "adsb source failed: $base"
+    done
+    return 1
+}
+
+opensky_fetch_raw() { # LAT LON OUT
+    [ "$OPENSKY_DAY" -gt 0 ] || return 1
+    mkdir -p "$PT_CACHE_DIR" 2>/dev/null
+    RC="$PT_CACHE_DIR/$AIRPORT.osky.json"
+    rts="$(cat "$RC.t" 2>/dev/null)"
+    case "$rts" in ''|*[!0-9]*) rts=0 ;; esac
+    if [ -s "$RC" ] && [ $(( $(date +%s) - rts )) -lt 10 ]; then
+        cp "$RC" "$3"
+        return 0
+    fi
+    opensky_allow || return 1
+    CURLBIN="$(pt_curl_bin)" || return 1
+    R=$(( RANGE * 2 ))
+    [ $R -lt 60 ]  && R=60
+    [ $R -gt 250 ] && R=250
+    BBOX="$(awk -v la="$1" -v lo="$2" -v r="$R" 'BEGIN {
+        dla = r / 60.0
+        c = cos(la * 3.141592653589793 / 180); if (c < 0.1) c = 0.1
+        dlo = r / (60.0 * c)
+        printf "lamin=%.4f&lomin=%.4f&lamax=%.4f&lomax=%.4f", \
+            la - dla, lo - dlo, la + dla, lo + dlo }')"
+    if "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
+        -A "PaperTerminal/$PT_VERSION" -o "$3" \
+        "$OPENSKY_BASE/states/all?$BBOX" 2>/dev/null \
+       && grep -q '"states"' "$3"; then
+        opensky_count
+        cp "$3" "$RC" 2>/dev/null && date +%s > "$RC.t"
+        return 0
+    fi
+    log "opensky source failed"
+    return 1
+}
+
+# The free keyless flight source: a live board derived from ADS-B.
+src_adsb_flights() { # _ DIR WINDOW LIMIT OUT
+    coords="$(apt_coords "$AIRPORT")" || {
+        log "adsb source needs $AIRPORT in data/airports.txt"; return 1; }
+    set -- "$coords" "$2" "$3" "$4" "$5"
+    LATLON="$1"
+    NOWMIN="$(now_abs_min)"
+    RAW="$PT_TMP.raw"; : > "$RAW"
+    if adsb_fetch_raw $LATLON "$PT_TMP.acjson"; then
+        awk -v DIRQ="$2" -v NOW="$NOWMIN" \
+            -v LA="${LATLON% *}" -v LO="${LATLON#* }" \
+            "$PT_AWK_JSON $PT_AWK_NMI $PT_AWK_SCAN $PT_AWK_ADSB_BOARD" \
+            "$PT_AIRLINES" "$PT_TMP.acjson" > "$RAW"
+    elif opensky_fetch_raw $LATLON "$PT_TMP.acjson"; then
+        awk -v DIRQ="$2" -v NOW="$NOWMIN" \
+            -v LA="${LATLON% *}" -v LO="${LATLON#* }" \
+            "$PT_AWK_NMI $PT_AWK_OSKY_BOARD" \
+            "$PT_AIRLINES" "$PT_TMP.acjson" > "$RAW"
+    else
+        rm -f "$PT_TMP.acjson"
+        return 1
+    fi
+    rm -f "$PT_TMP.acjson"
     src_finish_raw "$RAW" "$3" "$4" "$5"
 }
 
@@ -404,6 +653,7 @@ src_try() { # IDX DIR WINDOW LIMIT OUT - run one configured source
     PT_SRC_TYPE="${spec%%,*}"
     arg="${spec#*,}"; [ "$arg" = "$spec" ] && arg=""
     case "$PT_SRC_TYPE" in
+        adsb)          src_adsb_flights "" "$2" "$3" "$4" "$5" ;;
         aeroapi)       src_aeroapi "$arg" "$2" "$3" "$4" "$5" ;;
         aviationstack) src_avstack "$arg" "$2" "$3" "$4" "$5" ;;
         *) log "unknown source type: $PT_SRC_TYPE"; return 1 ;;
@@ -520,76 +770,25 @@ opensky_count() {
     echo "$OSKY_DKEY $(( ODC + 1 ))" > "$PT_OSKY_USAGE" 2>/dev/null
 }
 
-# opensky_positions LAT0 LON0 OUT - bounding-box query around the airport.
-opensky_positions() {
-    [ "$OPENSKY_DAY" -gt 0 ] || return 1
-    opensky_allow || return 1
-    CURLBIN="$(pt_curl_bin)" || return 1
-    R=$(( RANGE * 2 ))
-    [ $R -lt 60 ]  && R=60
-    [ $R -gt 250 ] && R=250
-    BBOX="$(awk -v la="$1" -v lo="$2" -v r="$R" 'BEGIN {
-        dla = r / 60.0
-        c = cos(la * 3.141592653589793 / 180); if (c < 0.1) c = 0.1
-        dlo = r / (60.0 * c)
-        printf "lamin=%.4f&lomin=%.4f&lamax=%.4f&lomax=%.4f", \
-            la - dla, lo - dlo, la + dla, lo + dlo }')"
-    if "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
-        -A "PaperTerminal/$PT_VERSION" -o "$PT_TMP.osky" \
-        "$OPENSKY_BASE/states/all?$BBOX" 2>/dev/null \
-       && grep -q '"states"' "$PT_TMP.osky"; then
-        awk -v LA="$1" -v LO="$2" "$PT_AWK_OPENSKY" "$PT_TMP.osky" > "$3"
-        rm -f "$PT_TMP.osky"
-        opensky_count
-        return 0
-    fi
-    rm -f "$PT_TMP.osky"
-    log "opensky source failed"
-    return 1
-}
-
 # src_positions OUT - live positions near AIRPORT as CS|DX|DY lines.
 # Sources: the re-api aggregators (adsb.fi, adsb.lol) first, then the
-# OpenSky Network. Results are cached for 10 seconds - the anonymous
-# OpenSky data resolution, and a courtesy to all the open aggregators.
+# OpenSky Network. The raw fetchers hold a shared 10-second cache.
 src_positions() {
     OUTPOS="$1"
     : > "$OUTPOS"
     coords="$(apt_coords "$AIRPORT")" || { log "no coords for $AIRPORT (data/airports.txt)"; return 1; }
-    CURLBIN="$(pt_curl_bin)" || { log "adsb needs lib/curl"; return 1; }
     set -- $coords
-
-    mkdir -p "$PT_CACHE_DIR" 2>/dev/null
-    PC="$PT_CACHE_DIR/$AIRPORT.pos"
-    pts="$(cat "$PC.t" 2>/dev/null)"
-    case "$pts" in ''|*[!0-9]*) pts=0 ;; esac
-    if [ -s "$PC" ] && [ $(( $(date +%s) - pts )) -lt 10 ]; then
-        cp "$PC" "$OUTPOS"
+    if adsb_fetch_raw "$1" "$2" "$PT_TMP.acjson"; then
+        awk -v LA="$1" -v LO="$2" \
+            "$PT_AWK_JSON $PT_AWK_SCAN $PT_AWK_ADSB" "$PT_TMP.acjson" > "$OUTPOS"
+        rm -f "$PT_TMP.acjson"
         return 0
     fi
-
-    R=$(( RANGE * 2 ))
-    [ $R -lt 60 ]  && R=60
-    [ $R -gt 250 ] && R=250
-    # Resolution order: test override, then the config file, then default.
-    for base in ${PT_ADSB_BASES:-${ADSB_URLS:-$ADSB_DEFAULT}}; do
-        if "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
-            -A "PaperTerminal/$PT_VERSION" -o "$PT_TMP.adsb" \
-            "$base/point/$1/$2/$R" 2>/dev/null \
-           && grep -q '"ac"' "$PT_TMP.adsb"; then
-            awk -v LA="$1" -v LO="$2" \
-                "$PT_AWK_JSON $PT_AWK_SCAN $PT_AWK_ADSB" "$PT_TMP.adsb" > "$OUTPOS"
-            rm -f "$PT_TMP.adsb"
-            cp "$OUTPOS" "$PC" 2>/dev/null && date +%s > "$PC.t"
-            return 0
-        fi
-        log "adsb source failed: $base"
-    done
-    rm -f "$PT_TMP.adsb"
-
-    if opensky_positions "$1" "$2" "$OUTPOS"; then
-        cp "$OUTPOS" "$PC" 2>/dev/null && date +%s > "$PC.t"
+    if opensky_fetch_raw "$1" "$2" "$PT_TMP.acjson"; then
+        awk -v LA="$1" -v LO="$2" "$PT_AWK_OPENSKY" "$PT_TMP.acjson" > "$OUTPOS"
+        rm -f "$PT_TMP.acjson"
         return 0
     fi
+    rm -f "$PT_TMP.acjson"
     return 1
 }

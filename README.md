@@ -30,11 +30,22 @@ so the K3 can speak today's HTTPS; its 2010-era stock curl/openssl/wget
 are deliberately never used for TLS. All JSON parsing happens on-device
 in a small busybox-awk parser.
 
+**Everything works out of the box with no API key**: the default data
+source derives a live board from free, keyless ADS-B feeds. Keyed APIs
+(FlightAware AeroAPI, aviationstack) are used **only if you explicitly
+configure them** and add true schedules, origins/destinations, and actual
+runway data — see [Data sources](#data-sources) for exactly what each
+provides and costs.
+
 ## Features
 
+- **Works with zero configuration**: the default data source is free and
+  keyless — a live board derived from ADS-B; API keys are optional
+  upgrades for true schedules and actual runway data
 - Arrivals board, departures board, and a combined board that interleaves
   both directions sorted by time
-- Origin airport shown for arrivals, destination for departures
+- Origin airport shown for arrivals, destination for departures (with
+  keyed schedule sources)
 - **Live traffic map**: plots live ADS-B positions of the ROWS flights
   before and after now around your airport (`v` arriving, `^` departing,
   `+` the airport), with a distance legend — positions come straight from
@@ -49,7 +60,8 @@ in a small busybox-awk parser.
   (OurAirports data), and unknown codes are looked up via AeroAPI once
   and remembered
 - **Failover**: up to three data sources tried in order (e.g. AeroAPI
-  first, aviationstack as backup), and multiple ADS-B sources for positions
+  first, aviationstack, then keyless adsb), and four keyless feeds behind
+  the adsb source (adsb.fi, adsb.lol, adsb.one, OpenSky)
 - Boards and map auto-update every 5 seconds (configurable), with change
   detection so the e-ink only repaints when something actually changed —
   the Kindle works as a set-and-forget wall display
@@ -68,12 +80,11 @@ in a small busybox-awk parser.
 - **KUAL** installed. On the K3 that is the *KUAL Kindlet* (`KUAL-*.azw2`
   placed in the `documents` folder), which also requires the kindlet
   jailbreak key from the same MobileRead resources
-- Wi-Fi and a **free API key** from one (or both, for failover) of:
-  - [FlightAware AeroAPI](https://www.flightaware.com/aeroapi) — has real
-    runway-used data and ICAO aircraft types; personal tier is free within
-    monthly limits
-  - [aviationstack](https://aviationstack.com) — free key; no runway data
-    (shown as `-`)
+- Wi-Fi. **No API key is required** — the default source is keyless
+  ADS-B. Optionally add a free key from
+  [FlightAware AeroAPI](https://www.flightaware.com/aeroapi) and/or
+  [aviationstack](https://aviationstack.com) for true schedule data
+  (see [Data sources](#data-sources))
 
 > **Note on 3G:** the K3's free 3G (Whispernet) only reaches Amazon
 > services — it cannot reach the flight APIs. PaperTerminal needs Wi-Fi.
@@ -99,17 +110,17 @@ From a checkout instead:
    /mnt/us/extensions/paperterminal/lib/...
    ```
 
-3. Put your API key in `extensions/paperterminal/paperterminal.conf`
-   (created with defaults on first run, or create it yourself):
+3. Eject, open KUAL from your books list, and pick
+   **PaperTerminal Flight Board > Open PaperTerminal**. It works
+   immediately — no account, no key. Run the **Network self-test**
+   (N key, or from KUAL) to confirm each layer.
+4. Optional: for true schedules, origins/destinations and actual runway
+   data, add an API key in `extensions/paperterminal/paperterminal.conf`:
 
    ```
    SOURCE1=aeroapi,YOUR_AEROAPI_KEY
+   SOURCE2=adsb
    ```
-
-4. Eject, open KUAL from your books list, and pick
-   **PaperTerminal Flight Board > Open PaperTerminal**. Run the
-   **Network self-test** first (N key, or from KUAL) to confirm each
-   layer works.
 
 ## Usage and navigation
 
@@ -156,9 +167,11 @@ into `KEY_MENU`/`KEY_BACK`/`KEY_HOME` in the config file.
 
 ```
 AIRPORT=ZRH        # any IATA (ZRH) or ICAO (LSZH) code
-SOURCE1=aeroapi,YOUR_KEY         # tried first
-SOURCE2=aviationstack,YOUR_KEY   # optional backup source
-SOURCE3=                         # optional third source
+SOURCE1=adsb       # free keyless default; keyed APIs only if you
+SOURCE2=           # explicitly configure them, e.g.:
+SOURCE3=           #   SOURCE1=aeroapi,YOUR_KEY
+                   #   SOURCE2=aviationstack,YOUR_KEY
+                   #   SOURCE3=adsb
 ROWS=12            # flights per board; per-side count on the map
 REFRESH=5          # update interval in seconds (0 = draw once);
                    # repaints only when the content changed
@@ -166,7 +179,8 @@ RANGE=32           # live traffic map radius in nautical miles
 CACHE=300          # seconds to reuse fetched data (protects API quota)
 AERO_DAY=6         # AeroAPI budget: max queries per day...
 AERO_MONTH=190     # ...and per calendar month (free-tier fit)
-OPENSKY_DAY=300    # anonymous OpenSky queries/day (last position
+AVSTACK_MONTH=90   # aviationstack requests/month (free tier ~100)
+OPENSKY_DAY=300    # anonymous OpenSky queries/day (last-resort
                    # fallback; ~400 allowed, 0 disables)
 KEY_MENU=139       # navigation keycodes - see the key test screen
 KEY_BACK=158
@@ -184,50 +198,81 @@ codes are auto-added via AeroAPI on selection, and the **Refresh airport
 database** GitHub Actions workflow regenerates the file from the
 public-domain OurAirports dataset.
 
-## Flight data — direct from public APIs
+## Data sources
 
 `bin/sources.sh` fetches straight from the configured APIs with the
-bundled curl and parses the JSON on-device with a small awk object
-scanner (no key-order or formatting assumptions):
+bundled curl and parses everything on-device with a small awk parser (no
+key-order or formatting assumptions). `SOURCE1..3` are tried in order
+until one delivers; the board footer names what you're looking at
+(`LIVE AIR ZRH (ADS-B EST.)`, `[SRC2]` for a backup source,
+`DATA 25MIN OLD` for stale cache). Every keyed or limited API is
+**budgeted client-side with persistent counters**, so PaperTerminal can't
+run past a free tier by itself.
 
-- **AeroAPI** (`SOURCE1=aeroapi,KEY`): arrivals, scheduled arrivals,
-  departures and scheduled departures per airport, with **actual runway
-  used** on flights that have landed/departed and ICAO aircraft types.
-  Requires the bundled curl (HTTPS + API-key header). One combined
-  `/flights` query (billed once) carries all four groups, and its raw
-  JSON is cached, so switching between the arrivals, departures and
-  combined boards costs nothing extra.
-- **aviationstack** (`SOURCE2=aviationstack,KEY`): full airline names and
-  IATA aircraft types, no runway data. Works over plain HTTP, so it even
-  functions without `lib/curl`.
-- **ADS-B positions** (no key): the traffic map asks adsb.fi (then
-  adsb.lol as fallback; order configurable via `ADSB_URLS`, and the
-  OpenSky Network as a last resort) for all aircraft around the airport
-  in one call, matches them to flights by callsign, and plots east/north
-  offsets computed in awk. Position results are cached for 10 seconds.
-  OpenSky's anonymous API allows roughly 400 credits per day at 10-second
-  data resolution, so its calls are capped client-side (`OPENSKY_DAY`,
-  default 300, persistent counter) — the same budget pattern used for
-  AeroAPI.
+| Source | Key | Board data | Runway | FR/TO | Positions |
+|---|---|---|---|---|---|
+| `adsb` (default) | none | derived live | estimated on final/climb-out | — | yes |
+| `aeroapi` | required | true schedules | actual, after landing/takeoff | yes | — |
+| `aviationstack` | required | true schedules | — | yes | — |
+| OpenSky (built-in fallback) | none | derived live | estimated | — | yes |
 
-Sources are tried in order until one delivers; the board footer notes
-when a backup source answered (`BACKUP SOURCE 2`). Responses are cached
-in `/tmp` for `CACHE` seconds, so redraws don't burn API quota. Airline
-codes are mapped to display names via `data/airlines.txt`.
+### `adsb` — free, keyless, the default (`SOURCE1=adsb`)
 
-### Staying inside the AeroAPI free tier
+Derives a live board from ADS-B transponder data: what is actually in
+the air around your airport right now. Aircraft are classified as
+arrivals or departures from their track relative to the airport; the
+TIME column is an **estimate** (arrival ETA or minutes-ago departure,
+from distance ÷ groundspeed); on low final approach or climb-out the
+runway is **estimated from the aircraft's heading** (runway numbers are
+headings/10); airline names resolve from the ICAO callsign prefix via
+`data/airlines.txt`. Peculiarities to know: origin/destination is
+unknown (`FR/TO` shows `-`), flights not yet airborne don't appear, and
+callsigns can differ from marketed flight numbers (SWR4TH vs LX318).
+Data comes from adsb.fi, then adsb.lol, then adsb.one — all keyless and
+speaking the same readsb "re-api" (`ADSB_URLS` reorders or extends the
+list) — then OpenSky; raw responses are cached for 10 seconds. Needs the
+airport's coordinates in `data/airports.txt` (3,270 bundled) and
+`lib/curl`.
 
-FlightAware's Personal tier is a monthly usage credit (about USD 5, at
-roughly USD 0.025 per airport-flights query — around 200 queries a
-month). PaperTerminal enforces that **client-side**: a persistent
-counter (`aeroapi.usage`) caps AeroAPI calls at `AERO_DAY` per day
-(default 6) and `AERO_MONTH` per calendar month (default 190, leaving a
-margin), covering board fetches and airport lookups alike. When the
-budget is spent, the next source takes over; if none is configured, the
-last data is shown with an honest footer like `ZRH - DATA 25MIN OLD`
-instead of an empty board. Current usage is shown on the help screen and
-in the network self-test. If FlightAware changes their pricing, adjust
-the two caps in the config.
+### `aeroapi` — FlightAware AeroAPI (`SOURCE1=aeroapi,KEY`)
+
+True schedules: arrivals, scheduled arrivals, departures and scheduled
+departures, with origin/destination airports, ICAO aircraft types, and
+the **actual runway used** on flights that have landed or departed
+(scheduled flights show `-` until then). Key from
+flightaware.com/aeroapi; the Personal tier is a monthly usage credit
+(~USD 5, roughly USD 0.025 per airport-flights query ≈ 200/month).
+PaperTerminal fits that by design: one combined `/flights` query (billed
+once) serves all three boards from cached raw JSON, and a persistent
+counter caps calls at `AERO_DAY`/day (default 6) and `AERO_MONTH`/month
+(default 190) — covering airport-search lookups too. Usage shows on the
+help screen and self-test. Requires `lib/curl` (HTTPS + API-key header).
+Accepts IATA and ICAO airport codes.
+
+### `aviationstack` (`SOURCE2=aviationstack,KEY`)
+
+True schedules with full airline names and IATA aircraft types; **no
+runway data** (always `-`). Key from aviationstack.com; the free tier
+allows about 100 requests per month and only plain HTTP — which is also
+its unique strength here: it works even without `lib/curl` (busybox wget
+fallback). Budgeted at `AVSTACK_MONTH`/month (default 90, persistent
+counter). Note each combined-board refresh costs 2 requests (arrivals +
+departures are separate calls), so it fits best as a backup source.
+
+### OpenSky Network — built-in last resort, keyless
+
+Used automatically (never configured as a SOURCE) when all three ADS-B
+aggregators are unreachable: positions for the traffic map and the same
+derived board, from `/states/all` with a bounding box around the
+airport. Anonymous peculiarities are respected: ~400 credits/day
+(budgeted at `OPENSKY_DAY`, default 300, persistent counter; 0 disables),
+10-second data resolution (matched by the raw cache), metric units
+(converted), and array-shaped responses (own parser, tolerant of
+comma-containing country names).
+
+All flight data is additionally cached for `CACHE` seconds (default
+300), and when everything fails the last data is shown with an honest
+footer (`ZRH - DATA 25MIN OLD`) instead of an empty board.
 
 ## Bundled HTTPS stack
 
