@@ -18,8 +18,10 @@ PT_TMP="/tmp/paperterminal.feed"
 PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
+PT_EVKEY="$PT_LIB/evkey"
+PT_RAMEVKEY="/var/tmp/paperterminal-evkey"
 
-PT_VERSION="4.0.1"
+PT_VERSION="4.0.2"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -209,15 +211,41 @@ pt_curl_bin() {
     echo "$PT_RAMCURL"
 }
 
+# Runnable bundled evkey (keycode reader - the K3 busybox lacks od, so
+# shell-parsing input events is impossible there). Same noexec handling
+# as curl: run in place, or from a /var/tmp copy. A run with no
+# arguments exits 1, which doubles as the "does it execute" probe.
+pt_evkey_bin() {
+    [ -f "$PT_EVKEY" ] || return 1
+    "$PT_EVKEY" >/dev/null 2>&1
+    if [ $? -eq 1 ]; then
+        echo "$PT_EVKEY"
+        return 0
+    fi
+    if [ ! -x "$PT_RAMEVKEY" ] ||
+       [ "$(wc -c < "$PT_EVKEY")" != "$(wc -c < "$PT_RAMEVKEY")" ]; then
+        cp "$PT_EVKEY" "$PT_RAMEVKEY" 2>/dev/null && chmod 755 "$PT_RAMEVKEY" \
+            || return 1
+    fi
+    "$PT_RAMEVKEY" >/dev/null 2>&1
+    if [ $? -eq 1 ]; then
+        echo "$PT_RAMEVKEY"
+        return 0
+    fi
+    return 1
+}
+
 # pt_fetch <url> <outfile> - 0 on success. Prefers the bundled curl with
 # the bundled CA certificates (http and https alike); falls back to
 # busybox wget, which can only manage plain http.
 pt_fetch() {
     CURLBIN="$(pt_curl_bin)"
     if [ -n "$CURLBIN" ]; then
+        # curl's stderr goes to the log so real failure reasons (DNS,
+        # TLS, timeouts) are diagnosable from paperterminal.log
         "$CURLBIN" -sS --connect-timeout 15 -m 40 \
             --cacert "$PT_CACERT" -A "PaperTerminal/$PT_VERSION" \
-            -o "$2" "$1" 2>/dev/null
+            -o "$2" "$1" 2>>"$PT_LOG"
         return $?
     fi
     case "$1" in

@@ -12,6 +12,9 @@ openssl     OpenSSL 3.5.7 command-line tool (s_client etc. for debugging).
             OPENSSLDIR: /mnt/us/extensions/paperterminal/lib/ssl
 cacert.pem  Mozilla CA root certificate bundle as published by the curl
             project (https://curl.se/ca/cacert.pem), 121 roots.
+evkey       Tiny static input-event reader (build/evkey.c): prints one
+            decimal keycode per key-down. Needed because the Kindle 3's
+            busybox lacks od/hexdump for parsing /dev/input in shell.
 
 Target
 ------

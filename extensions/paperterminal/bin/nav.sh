@@ -40,29 +40,53 @@ trap cleanup EXIT
 trap 'exit 0' INT TERM
 
 # --------------------------------------------------------------- input -----
+# Preferred: the bundled static evkey binary prints one decimal keycode
+# per key-down - needed on the K3, whose busybox has no od/hexdump.
+# Fallback: raw event reads parsed with od, for devices that have it.
+
+INPUT_MODE=""
 
 start_input() {
     rm -f "$PT_KEYPIPE"
     mkfifo "$PT_KEYPIPE" 2>/dev/null || return 1
+    DEVS=""
     for d in $INPUT_DEVS; do
-        if [ -r "$d" ]; then
+        [ -r "$d" ] && DEVS="$DEVS $d"
+    done
+    [ -n "$DEVS" ] || return 1
+    EVKEY="$(pt_evkey_bin)"
+    if [ -n "$EVKEY" ]; then
+        "$EVKEY" $DEVS > "$PT_KEYPIPE" &
+        READER_PIDS="$!"
+        INPUT_MODE="evkey"
+    else
+        for d in $DEVS; do
             cat "$d" > "$PT_KEYPIPE" &
             READER_PIDS="$READER_PIDS $!"
-        fi
-    done
-    [ -n "$READER_PIDS" ] || return 1
+        done
+        INPUT_MODE="raw"
+        log "evkey not runnable - using od fallback for keys"
+    fi
     exec 3< "$PT_KEYPIPE"
 }
 
 # Print the keycode of the next key-down event (blocks). Empty output for
 # non-key events; callers loop.
 getkey() {
-    dd bs=16 count=1 <&3 2>/dev/null | od -An -tu1 | awk '
-        { for (i = 1; i <= NF; i++) b[++n] = $i }
-        END {
-            if (n >= 16 && b[9] + b[10] * 256 == 1 && b[13] == 1)
-                print b[11] + b[12] * 256
-        }'
+    if [ "$INPUT_MODE" = "evkey" ]; then
+        if ! read -r _k <&3; then
+            sleep 1   # reader died; avoid a tight spin until watchdog fires
+            return 0
+        fi
+        case "$_k" in ''|*[!0-9]*) ;; *) echo "$_k" ;; esac
+    else
+        dd bs=16 count=1 <&3 2>/dev/null | od -An -tu1 2>/dev/null | awk '
+            { for (i = 1; i <= NF; i++) b[++n] = $i }
+            END {
+                if (n >= 16 && b[9] + b[10] * 256 == 1 && b[13] == 1)
+                    print b[11] + b[12] * 256
+            }'
+    fi
 }
 
 # Idle watchdog: without keypresses the session ends so no readers

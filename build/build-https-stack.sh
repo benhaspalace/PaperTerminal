@@ -159,14 +159,21 @@ smoke_test() {
     echo "smoke tests passed (TLS 1.3, TLS 1.2, bad-CA rejected)"
 }
 
+build_evkey() {
+    echo "== building evkey (input keycode reader)"
+    arm-buildroot-linux-musleabi-gcc -Os -static -no-pie \
+        -o "$WORK/evkey" "$REPO/build/evkey.c"
+}
+
 install_lib() {
     echo "== installing into $LIB"
     STRIP=arm-buildroot-linux-musleabi-strip
     cp "$WORK/curl-$CURL_VERSION/src/curl" "$LIB/curl"
     cp "$WORK/sslout/bin/openssl" "$LIB/openssl"
+    cp "$WORK/evkey" "$LIB/evkey"
     cp "$WORK/cacert.pem" "$LIB/cacert.pem"
-    "$STRIP" "$LIB/curl" "$LIB/openssl"
-    chmod 755 "$LIB/curl" "$LIB/openssl"
+    "$STRIP" "$LIB/curl" "$LIB/openssl" "$LIB/evkey"
+    chmod 755 "$LIB/curl" "$LIB/openssl" "$LIB/evkey"
 
     cat > "$LIB/BUILDINFO.txt" <<EOF
 PaperTerminal bundled HTTPS stack
@@ -201,7 +208,7 @@ $(cd "$WORK" && sha256sum "openssl-$OPENSSL_VERSION.tar.gz" "curl-$CURL_VERSION.
 (openssl + cacert.pem verified against publisher-hosted .sha256 files)
 EOF
 
-    (cd "$LIB" && sha256sum curl openssl cacert.pem > SHA256SUMS)
+    (cd "$LIB" && sha256sum curl openssl evkey cacert.pem > SHA256SUMS)
     ls -la "$LIB"
 }
 
@@ -210,6 +217,7 @@ resolve_latest
 download
 build_openssl
 build_curl
+build_evkey
 smoke_test
 install_lib
 echo "== done"
