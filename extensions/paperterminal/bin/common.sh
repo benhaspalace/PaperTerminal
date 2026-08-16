@@ -5,6 +5,14 @@
 
 PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
+# Processes spawned from the KUAL kindlet inherit the Java framework's
+# resource limits, which can be far too small for a TLS handshake
+# (curl exits with 'Out of memory'). Raise what we're allowed to raise.
+ulimit -v unlimited 2>/dev/null
+ulimit -d unlimited 2>/dev/null
+ulimit -m unlimited 2>/dev/null
+ulimit -s 8192 2>/dev/null
+
 PT_BIN="$(cd "$(dirname "$0")" && pwd)"
 PT_HOME="$(dirname "$PT_BIN")"
 PT_CONF="$PT_HOME/paperterminal.conf"
@@ -20,8 +28,10 @@ PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 PT_EVKEY="$PT_LIB/evkey"
 PT_RAMEVKEY="/var/tmp/paperterminal-evkey"
+PT_OPENSSL="$PT_LIB/openssl"
+PT_RAMOPENSSL="/var/tmp/paperterminal-openssl"
 
-PT_VERSION="4.0.2"
+PT_VERSION="4.0.3"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -211,6 +221,26 @@ pt_curl_bin() {
     echo "$PT_RAMCURL"
 }
 
+# One curl at a time: concurrent TLS handshakes can exhaust the K3's
+# free RAM (curl error 27). mkdir is the atomic primitive; a lock older
+# than ~10s is presumed stale and broken.
+PT_CURLLOCK="/tmp/paperterminal.curl.lock"
+
+pt_lock() {
+    _i=0
+    while ! mkdir "$PT_CURLLOCK" 2>/dev/null; do
+        _i=$(( _i + 1 ))
+        if [ $_i -ge 10 ]; then
+            rm -rf "$PT_CURLLOCK" 2>/dev/null
+            mkdir "$PT_CURLLOCK" 2>/dev/null
+            break
+        fi
+        sleep 1
+    done
+}
+
+pt_unlock() { rm -rf "$PT_CURLLOCK" 2>/dev/null; }
+
 # Runnable bundled evkey (keycode reader - the K3 busybox lacks od, so
 # shell-parsing input events is impossible there). Same noexec handling
 # as curl: run in place, or from a /var/tmp copy. A run with no
@@ -235,6 +265,22 @@ pt_evkey_bin() {
     return 1
 }
 
+# Runnable bundled openssl CLI (diagnostics), same noexec handling.
+pt_openssl_bin() {
+    [ -f "$PT_OPENSSL" ] || return 1
+    if "$PT_OPENSSL" version >/dev/null 2>&1; then
+        echo "$PT_OPENSSL"
+        return 0
+    fi
+    if [ ! -x "$PT_RAMOPENSSL" ] ||
+       [ "$(wc -c < "$PT_OPENSSL")" != "$(wc -c < "$PT_RAMOPENSSL")" ]; then
+        cp "$PT_OPENSSL" "$PT_RAMOPENSSL" 2>/dev/null && chmod 755 "$PT_RAMOPENSSL" \
+            || return 1
+    fi
+    "$PT_RAMOPENSSL" version >/dev/null 2>&1 || return 1
+    echo "$PT_RAMOPENSSL"
+}
+
 # pt_fetch <url> <outfile> - 0 on success. Prefers the bundled curl with
 # the bundled CA certificates (http and https alike); falls back to
 # busybox wget, which can only manage plain http.
@@ -243,10 +289,13 @@ pt_fetch() {
     if [ -n "$CURLBIN" ]; then
         # curl's stderr goes to the log so real failure reasons (DNS,
         # TLS, timeouts) are diagnosable from paperterminal.log
+        pt_lock
         "$CURLBIN" -sS --connect-timeout 15 -m 40 \
             --cacert "$PT_CACERT" -A "PaperTerminal/$PT_VERSION" \
             -o "$2" "$1" 2>>"$PT_LOG"
-        return $?
+        _rc=$?
+        pt_unlock
+        return $_rc
     fi
     case "$1" in
         https://*)

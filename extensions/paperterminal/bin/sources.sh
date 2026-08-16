@@ -484,11 +484,15 @@ src_aeroapi() { # KEY DIR WINDOW LIMIT OUT
     if [ ! -s "$JC" ] || [ $age -ge "$CACHE" ]; then
         if aero_allow; then
             CURLBIN="$(pt_curl_bin)" || { log "aeroapi needs lib/curl"; return 1; }
-            if "$CURLBIN" -sS --connect-timeout 15 -m 40 --cacert "$PT_CACERT" \
+            pt_lock
+            "$CURLBIN" -sS --connect-timeout 15 -m 40 --cacert "$PT_CACERT" \
                 -H "x-apikey: $1" -A "PaperTerminal/$PT_VERSION" \
                 -o "$PT_TMP.json" \
                 "$AEROAPI_BASE/airports/$AIRPORT/flights?max_pages=1" \
-                2>>"$PT_LOG" && grep -q '"ident' "$PT_TMP.json"; then
+                2>>"$PT_LOG"
+            _rc=$?
+            pt_unlock
+            if [ $_rc -eq 0 ] && grep -q '"ident' "$PT_TMP.json"; then
                 aero_count
                 mv "$PT_TMP.json" "$JC"
                 echo "$now" > "$JC.t"
@@ -576,10 +580,13 @@ adsb_fetch_raw() { # LAT LON OUT
     [ $R -gt 250 ] && R=250
     # Resolution order: test override, then the config file, then default.
     for base in ${PT_ADSB_BASES:-${ADSB_URLS:-$ADSB_DEFAULT}}; do
-        if "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
+        pt_lock
+        "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
             -A "PaperTerminal/$PT_VERSION" -o "$3" \
-            "$base/point/$1/$2/$R" 2>>"$PT_LOG" \
-           && grep -q '"ac"' "$3"; then
+            "$base/point/$1/$2/$R" 2>>"$PT_LOG"
+        _rc=$?
+        pt_unlock
+        if [ $_rc -eq 0 ] && grep -q '"ac"' "$3"; then
             cp "$3" "$RC" 2>/dev/null && date +%s > "$RC.t"
             return 0
         fi
@@ -609,10 +616,13 @@ opensky_fetch_raw() { # LAT LON OUT
         dlo = r / (60.0 * c)
         printf "lamin=%.4f&lomin=%.4f&lamax=%.4f&lomax=%.4f", \
             la - dla, lo - dlo, la + dla, lo + dlo }')"
-    if "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
+    pt_lock
+    "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
         -A "PaperTerminal/$PT_VERSION" -o "$3" \
-        "$OPENSKY_BASE/states/all?$BBOX" 2>>"$PT_LOG" \
-       && grep -q '"states"' "$3"; then
+        "$OPENSKY_BASE/states/all?$BBOX" 2>>"$PT_LOG"
+    _rc=$?
+    pt_unlock
+    if [ $_rc -eq 0 ] && grep -q '"states"' "$3"; then
         opensky_count
         cp "$3" "$RC" 2>/dev/null && date +%s > "$RC.t"
         return 0
@@ -724,10 +734,13 @@ apt_lookup_api() {
     done
     [ -n "$key" ] || return 1
     aero_allow || return 1
+    pt_lock
     "$CURLBIN" -sS --connect-timeout 15 -m 30 --cacert "$PT_CACERT" \
         -H "x-apikey: $key" -A "PaperTerminal/$PT_VERSION" \
-        -o "$PT_TMP.apt" "$AEROAPI_BASE/airports/$1" 2>>"$PT_LOG" || {
-        rm -f "$PT_TMP.apt"; return 1; }
+        -o "$PT_TMP.apt" "$AEROAPI_BASE/airports/$1" 2>>"$PT_LOG"
+    _rc=$?
+    pt_unlock
+    [ $_rc -eq 0 ] || { rm -f "$PT_TMP.apt"; return 1; }
     aero_count
     line="$(awk "$PT_AWK_JSON"'
         { buf = buf $0 }

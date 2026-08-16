@@ -40,6 +40,11 @@ case "$NETIF" in
 esac
 say 1 12 "  DNS SERVERS: ${NS:-0}   CLOCK: $(date '+%Y-%m-%d %H:%M')"
 say 1 13 "  (TLS NEEDS A ROUGHLY CORRECT CLOCK)"
+MF="$(awk '/^MemFree/ {print $2; exit}' /proc/meminfo 2>/dev/null)"
+MC="$(awk '/^Cached/ {print $2; exit}' /proc/meminfo 2>/dev/null)"
+UV="$(ulimit -v 2>/dev/null)"
+case "$UV" in unlimited) UV=max;; '') UV='?';; esac
+say 1 14 "  RAM FREE ${MF:-?}K CACHE ${MC:-?}K ULIM-V $UV"
 
 say 1 15 "TEST 3: INTERNET (RAW IP, THEN DNS + TLS)"
 if [ -n "$CURLBIN" ]; then
@@ -49,7 +54,7 @@ if [ -n "$CURLBIN" ]; then
     if [ -n "$IPC" ] && [ "$IPC" != "000" ]; then
         say 1 16 "  IP 1.1.1.1 HTTPS: OK (REACHES INTERNET)"
     else
-        say 1 16 "  IP 1.1.1.1 HTTPS: $(head -c 120 "$PT_TMP.err" | tr -d '\r\n' | cut -c8-33)"
+        say 1 16 "  IP 1.1.1.1 HTTPS: $(head -n 2 "$PT_TMP.err" | tr -d '\r\n' | cut -c8-33)"
     fi
     CODE="$("$CURLBIN" -sS --connect-timeout 10 -m 20 --cacert "$PT_CACERT" \
         -o /dev/null -w '%{http_code}' https://example.com/ 2>"$PT_TMP.err")"
@@ -57,8 +62,31 @@ if [ -n "$CURLBIN" ]; then
         say 1 17 "  example.com: OK (HTTP 200, CERT VERIFIED)"
     else
         say 1 17 "  example.com: FAILED (${CODE:-no reply})"
-        say 1 18 "  $(head -c 160 "$PT_TMP.err" | tr -d '\r\n' | cut -c8-52)"
+        say 1 18 "  $(head -n 2 "$PT_TMP.err" | tr -d '\r\n' | cut -c8-52)"
         cat "$PT_TMP.err" >> "$PT_LOG" 2>/dev/null
+    fi
+    # TLS cross-check with the bundled openssl CLI: if this works where
+    # curl reports out-of-memory, the problem is curl-specific; if both
+    # fail the same way, it's the environment (RAM/limits/network).
+    OSSL="$(pt_openssl_bin)"
+    if [ -n "$OSSL" ]; then
+        ( echo | "$OSSL" s_client -connect example.com:443 \
+            -CAfile "$PT_CACERT" -verify_return_error -quiet \
+            >/dev/null 2>"$PT_TMP.err" ) &
+        SCPID=$!
+        n=0
+        while kill -0 "$SCPID" 2>/dev/null; do
+            n=$(( n + 1 ))
+            [ $n -gt 12 ] && kill "$SCPID" 2>/dev/null
+            sleep 1
+        done
+        wait "$SCPID" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            say 1 19 "  openssl s_client: OK (TLS CROSS-CHECK)"
+        else
+            say 1 19 "  openssl s_client: $(head -n 1 "$PT_TMP.err" | cut -c1-27)"
+            cat "$PT_TMP.err" >> "$PT_LOG" 2>/dev/null
+        fi
     fi
     rm -f "$PT_TMP.err"
 else
