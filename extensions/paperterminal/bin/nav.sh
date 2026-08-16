@@ -23,7 +23,25 @@
 
 load_conf
 pt_capture_errors
-log "nav start: ${1:-menu}"
+
+# Single instance: an older nav session (e.g. from before an update)
+# would keep repainting the screen and eating keys underneath this one.
+PT_NAVPIDF="/tmp/paperterminal.nav.pid"
+OLDNAV="$(cat "$PT_NAVPIDF" 2>/dev/null)"
+case "$OLDNAV" in
+    ''|*[!0-9]*|"$$") ;;
+    *)
+        if [ -d "/proc/$OLDNAV" ]; then
+            # TERM first; a shell blocked in read ignores traps until the
+            # read returns, so escalate to KILL after a grace period.
+            kill -TERM "$OLDNAV" 2>/dev/null
+            sleep 1
+            [ -d "/proc/$OLDNAV" ] && kill -KILL "$OLDNAV" 2>/dev/null
+        fi ;;
+esac
+echo "$$" > "$PT_NAVPIDF"
+
+log "nav start: ${1:-menu} (v$PT_VERSION)"
 
 PT_KEYPIPE="/tmp/paperterminal.keys"
 READER_PIDS=""
@@ -35,6 +53,7 @@ cleanup() {
     [ -n "$WATCHDOG_PID" ] && kill $WATCHDOG_PID 2>/dev/null
     [ -n "$SHOWPID" ] && kill $SHOWPID 2>/dev/null
     rm -f "$PT_KEYPIPE"
+    [ "$(cat "$PT_NAVPIDF" 2>/dev/null)" = "$$" ] && rm -f "$PT_NAVPIDF"
 }
 trap cleanup EXIT
 trap 'exit 0' INT TERM
@@ -67,6 +86,7 @@ start_input() {
         INPUT_MODE="raw"
         log "evkey not runnable - using od fallback for keys"
     fi
+    log "input mode: $INPUT_MODE"
     exec 3< "$PT_KEYPIPE"
 }
 
@@ -95,7 +115,10 @@ getkey() {
 arm_watchdog() {
     [ -n "$WATCHDOG_PID" ] && kill $WATCHDOG_PID 2>/dev/null
     if [ "$REFRESH" -gt 0 ]; then IDLE=14400; else IDLE=600; fi
-    ( sleep $IDLE; kill -TERM $$ 2>/dev/null ) &
+    ( sleep $IDLE
+      kill -TERM $$ 2>/dev/null
+      sleep 3
+      kill -KILL $$ 2>/dev/null ) &
     WATCHDOG_PID=$!
 }
 
