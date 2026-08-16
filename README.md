@@ -9,12 +9,12 @@ extension. It turns the 600x800 e-ink screen into a classic flight board:
  ================================================
     TIME  FLIGHT  FR/TO AIRLINE          TYPE RWY
  ------------------------------------------------
- \v 13:41 LX 1073 BUD   SWISS            A20N 14
- /^ 13:44 LX 316  LCY   SWISS            BCS3 28
- \v 13:46 BA 710  LHR   BRITISH AIRWAYS  A320 14
- /^ 13:48 LH 1187 FRA   LUFTHANSA        A21N 28
- \v 13:51 WK 205  PMI   EDELWEISS        A343 16
- /^ 13:54 BA 711  LHR   BRITISH AIRWAYS  A320 28
+ \v 13:41 LX318   BUD   SWISS            A20N 14
+ /^ 13:44 LX316   LCY   SWISS            BCS3 28
+ \v 13:46 BA710   LHR   BRITISH AIRWAYS  A320 14
+ /^ 13:48 LH1187  FRA   LUFTHANSA        A21N 28
+ \v 13:51 WK205   PMI   EDELWEISS        A343 16
+ /^ 13:54 BA711   LHR   BRITISH AIRWAYS  A320 28
  ------------------------------------------------
  LIVE ZRH                               UPD 13:55
 ```
@@ -23,37 +23,55 @@ Each row shows the **time, airline, flight number, origin/destination
 airport, aircraft type, runway used**, and an arrival/departure
 **pictogram** (`\v` = arriving from, `/^` = departing to).
 
-Everything on the device is plain POSIX shell drawn with `eips`, plus a
-bundled, statically linked **modern curl + OpenSSL + Mozilla CA bundle**
-(`lib/`) so the Kindle can speak today's HTTPS — the K3's stock
-curl/openssl/wget are 2010-era and deliberately never used for TLS.
+The Kindle talks **directly to public flight-data APIs** — there is no
+proxy, server, or companion app. That works because the extension bundles
+a statically linked **modern curl + OpenSSL + Mozilla CA bundle** (`lib/`),
+so the K3 can speak today's HTTPS; its 2010-era stock curl/openssl/wget
+are deliberately never used for TLS. All JSON parsing happens on-device
+in a small busybox-awk parser.
+
+**Everything works out of the box with no API key**: the default data
+source derives a live board from free, keyless ADS-B feeds. Keyed APIs
+(FlightAware AeroAPI, aviationstack) are used **only if you explicitly
+configure them** and add true schedules, origins/destinations, and actual
+runway data — see [Data sources](#data-sources) for exactly what each
+provides and costs.
 
 ## Features
 
+- **Works with zero configuration**: the default data source is free and
+  keyless — a live board derived from ADS-B; API keys are optional
+  upgrades for true schedules and actual runway data
 - Arrivals board, departures board, and a combined board that interleaves
-  both directions sorted by time, launched from the KUAL menu
-- Origin airport shown for arrivals, destination for departures
-- Default airport: pick from a preset menu, or set **any** IATA/ICAO code by
-  editing a config file over USB
-- Live flight data from a tiny feed proxy (`server/feed_proxy.py`) with
-  real runway data via FlightAware
-- **Live traffic map**: plots the ADS-B positions of the ROWS flights
+  both directions sorted by time
+- Origin airport shown for arrivals, destination for departures (with
+  keyed schedule sources)
+- **Live traffic map**: plots live ADS-B positions of the ROWS flights
   before and after now around your airport (`v` arriving, `^` departing,
-  `+` the airport), with a distance legend — positions come from open
-  ADS-B aggregators, no extra API key
+  `+` the airport), with a distance legend — positions come straight from
+  open ADS-B aggregators, no API key needed
 - **Runway diagrams**: simple line drawings for ZRH, BUD, AMS and STR
   (plain-text files — add your own airport in minutes)
-- **Failover everywhere**: up to three feed URLs tried in order on the
-  device, a primary + fallback flight-data backend in the proxy, and
-  multiple ADS-B sources for positions
+- **Real on-device navigation**: MENU opens the PaperTerminal menu, BACK
+  returns to it (or exits), letter keys jump between screens, any other
+  key redraws — no trips back to KUAL needed
+- **Airport search on the keyboard**: type a code, city, or name and pick
+  from ranked matches — 3,270 scheduled-service airports are bundled
+  (OurAirports data), and unknown codes are looked up via AeroAPI once
+  and remembered
+- **Failover**: up to three data sources tried in order (e.g. AeroAPI
+  first, aviationstack, then keyless adsb), and four keyless feeds behind
+  the adsb source (adsb.fi, adsb.lol, adsb.one, OpenSky)
+- Boards and map auto-update every 5 seconds (configurable), with change
+  detection so the e-ink only repaints when something actually changed —
+  the Kindle works as a set-and-forget wall display
+- Response caching on-device to protect your API quota
 - Bundled HTTPS stack: static curl 8.21 with OpenSSL 3.5 LTS inside and an
   up-to-date Mozilla CA root bundle, built for the K3's ARMv6 CPU and 2.6
-  kernel — `https://` feed URLs work, verified against real certificates,
-  so the proxy can live anywhere on the internet, not just your LAN
-- On-device network self-test screen (checks the TLS stack, then the feed)
-- Optional auto-refresh
-- When the feed is unreachable, the board shows a diagnostic screen that
-  points at the failing step instead of stale or fake data
+  kernel, verifying real certificates
+- On-device network self-test that checks each layer separately
+- When every source fails, the board shows a diagnostic screen naming the
+  failing step instead of stale or fake data
 
 ## Requirements
 
@@ -62,13 +80,23 @@ curl/openssl/wget are 2010-era and deliberately never used for TLS.
 - **KUAL** installed. On the K3 that is the *KUAL Kindlet* (`KUAL-*.azw2`
   placed in the `documents` folder), which also requires the kindlet
   jailbreak key from the same MobileRead resources
-- Wi-Fi, plus any machine running Python 3 for the feed proxy — on your
-  LAN or anywhere on the internet behind HTTPS
+- Wi-Fi. **No API key is required** — the default source is keyless
+  ADS-B. Optionally add a free key from
+  [FlightAware AeroAPI](https://www.flightaware.com/aeroapi) and/or
+  [aviationstack](https://aviationstack.com) for true schedule data
+  (see [Data sources](#data-sources))
 
 > **Note on 3G:** the K3's free 3G (Whispernet) only reaches Amazon
-> services — it cannot reach your feed. PaperTerminal needs Wi-Fi.
+> services — it cannot reach the flight APIs. PaperTerminal needs Wi-Fi.
 
 ## Install
+
+The easiest way: download `paperterminal-<version>.zip` from the
+[Releases page](../../releases) and unzip it onto the Kindle's USB drive
+root — it contains `extensions/paperterminal/…` and merges into any
+existing `extensions` folder. Then continue at step 3.
+
+From a checkout instead:
 
 1. Plug the Kindle in over USB.
 2. Copy the `extensions/paperterminal` folder from this repo into the
@@ -78,57 +106,173 @@ curl/openssl/wget are 2010-era and deliberately never used for TLS.
    /mnt/us/extensions/paperterminal/config.xml
    /mnt/us/extensions/paperterminal/menu.json
    /mnt/us/extensions/paperterminal/bin/...
+   /mnt/us/extensions/paperterminal/data/...
    /mnt/us/extensions/paperterminal/lib/...
    ```
 
-3. Start the feed proxy somewhere (see [Flight data](#flight-data)) and put
-   its address in `paperterminal.conf` as `FEED_URL` — the file is created
-   with defaults on first run, or create it yourself over USB.
-4. Eject, open KUAL from your books list, and you'll see
-   **PaperTerminal Flight Board**. Run **Network self-test (HTTPS)** first
-   to confirm the Kindle can reach your feed.
+3. Eject, open KUAL from your books list, and pick
+   **PaperTerminal Flight Board > Open PaperTerminal**. It works
+   immediately — no account, no key. Run the **Network self-test**
+   (N key, or from KUAL) to confirm each layer.
+4. Optional: for true schedules, origins/destinations and actual runway
+   data, add an API key in `extensions/paperterminal/paperterminal.conf`:
 
-## Usage
+   ```
+   SOURCE1=aeroapi,YOUR_AEROAPI_KEY
+   SOURCE2=adsb
+   ```
 
-From the KUAL menu:
+## Usage and navigation
 
-- **Arrivals board** / **Departures board** / **Combined board** — draws
-  the board for the default airport (the combined board mixes arrivals and
-  departures, sorted by time). The board stays on screen until you press a
-  key (the keypress makes the Kindle repaint its normal UI — that's
-  expected).
-- **Live traffic map** — a scaled plan view of the airspace around the
-  default airport: the ROWS flights before and after the current time,
-  plotted from live ADS-B positions with a flight/distance legend.
-  `RANGE` in the config sets the radius (default 32 nm).
-- **Runway diagram** — a simple line drawing of the airport's runways
-  (bundled: ZRH, BUD, AMS, STR; drop a text file into `data/runways/` for
-  any other airport).
-- **Set default airport** — pick from common airports (ZRH, GVA, LHR, LGW,
-  AMS, CDG, FRA, MUC, VIE, BUD, JFK).
-- **Network self-test (HTTPS)** — checks the bundled TLS stack, then an
-  HTTPS fetch from the internet, then each configured feed in turn.
-- **Help + current settings** — shows the active configuration on screen.
+Open any screen from KUAL, or use **Open PaperTerminal (menu)** and
+navigate entirely on the device:
 
-If no configured feed can be reached, the board draws a diagnostic screen
-naming what it tried and the usual causes, instead of showing stale data.
+| Key | Action |
+|-----|--------|
+| `MENU` | open the PaperTerminal menu (from any screen) |
+| `BACK` | back to the menu; from the menu: exit |
+| `HOME` | exit to the Kindle UI |
+| `A` `D` `C` | arrivals / departures / combined board |
+| `M` `R` | live traffic map / runway diagram |
+| `N` `H` | network self-test / help |
+| `S` | **airport search**: type a code, city, or name; five-way up/down (or arrow keys) picks a match, Enter/centre sets it as the default airport, DEL erases |
+| `P` | cycle the default airport through the presets |
+| any other key | redraw the current screen (re-fetches data) |
+
+Boards and the traffic map keep updating themselves every `REFRESH`
+seconds (default 5) while shown — data is re-read from the cache layer
+(so the API budget is untouched) and the screen only repaints when
+something actually changed. A keypress always interrupts the updater
+immediately. When a screen is auto-updating, the navigation session's
+idle timeout is extended from 10 minutes to 4 hours, so a board can run
+as a wall display.
+
+In the search screen, matches are ranked exact code → code prefix → city
+prefix → any substring, over the bundled 3,270-airport database. A code
+that isn't in the database can still be selected with Enter: it is looked
+up once via AeroAPI and appended to `data/airports.txt`, so the traffic
+map gets its coordinates too.
+
+Two Kindle quirks are handled for you: KUAL repaints its own menu right
+after launching an action (racing whatever the action draws), so screens
+draw after a short settle delay; and because the Kindle framework still
+sees your keypresses underneath, the current screen simply redraws over
+whatever the framework painted. If the navigation keys don't respond,
+run **Key test (navigation setup)** from KUAL and put the codes it shows
+into `KEY_MENU`/`KEY_BACK`/`KEY_HOME` in the config file.
 
 ### Configuration file
 
-On first run the extension creates `extensions/paperterminal/paperterminal.conf`,
-which you can edit over USB with any text editor:
+`extensions/paperterminal/paperterminal.conf`, editable over USB:
 
 ```
-AIRPORT=ZRH      # any IATA (ZRH) or, for AeroAPI, ICAO (LSZH) code
-FEED_URL=http://192.168.0.10:8091/feed   # or https://... (bundled curl)
-FEED_URL2=       # optional backup feeds, tried in order
-FEED_URL3=       # when the previous one fails
-ROWS=12          # flights per board; also per-side count on the map
-REFRESH=0        # redraw every N seconds (0 = draw once)
-RANGE=32         # live traffic map radius in nautical miles
+AIRPORT=ZRH        # any IATA (ZRH) or ICAO (LSZH) code
+SOURCE1=adsb       # free keyless default; keyed APIs only if you
+SOURCE2=           # explicitly configure them, e.g.:
+SOURCE3=           #   SOURCE1=aeroapi,YOUR_KEY
+                   #   SOURCE2=aviationstack,YOUR_KEY
+                   #   SOURCE3=adsb
+ROWS=12            # flights per board; per-side count on the map
+REFRESH=5          # update interval in seconds (0 = draw once);
+                   # repaints only when the content changed
+RANGE=32           # live traffic map radius in nautical miles
+CACHE=300          # seconds to reuse fetched data (protects API quota)
+AERO_DAY=6         # AeroAPI budget: max queries per day...
+AERO_MONTH=190     # ...and per calendar month (free-tier fit)
+AVSTACK_MONTH=90   # aviationstack requests/month (free tier ~100)
+OPENSKY_DAY=300    # anonymous OpenSky queries/day (last-resort
+                   # fallback; ~400 allowed, 0 disables)
+KEY_MENU=139       # navigation keycodes - see the key test screen
+KEY_BACK=158
+KEY_HOME=102
+KEY_UP=103         # five-way, used in the search screen
+KEY_DOWN=108
+KEY_SELECT=194
 ```
 
-This is also how you set an airport that isn't in the preset menu.
+Airports can also be set here directly (`AIRPORT=XXX`), but the search
+screen (`S`) is the comfortable way. The traffic map needs the airport's
+coordinates from `data/airports.txt` (format
+`IATA|ICAO|LAT|LON|CITY|NAME`) — 3,270 airports are bundled, unknown
+codes are auto-added via AeroAPI on selection, and the **Refresh airport
+database** GitHub Actions workflow regenerates the file from the
+public-domain OurAirports dataset.
+
+## Data sources
+
+`bin/sources.sh` fetches straight from the configured APIs with the
+bundled curl and parses everything on-device with a small awk parser (no
+key-order or formatting assumptions). `SOURCE1..3` are tried in order
+until one delivers; the board footer names what you're looking at
+(`LIVE AIR ZRH (ADS-B EST.)`, `[SRC2]` for a backup source,
+`DATA 25MIN OLD` for stale cache). Every keyed or limited API is
+**budgeted client-side with persistent counters**, so PaperTerminal can't
+run past a free tier by itself.
+
+| Source | Key | Board data | Runway | FR/TO | Positions |
+|---|---|---|---|---|---|
+| `adsb` (default) | none | derived live | estimated on final/climb-out | — | yes |
+| `aeroapi` | required | true schedules | actual, after landing/takeoff | yes | — |
+| `aviationstack` | required | true schedules | — | yes | — |
+| OpenSky (built-in fallback) | none | derived live | estimated | — | yes |
+
+### `adsb` — free, keyless, the default (`SOURCE1=adsb`)
+
+Derives a live board from ADS-B transponder data: what is actually in
+the air around your airport right now. Aircraft are classified as
+arrivals or departures from their track relative to the airport; the
+TIME column is an **estimate** (arrival ETA or minutes-ago departure,
+from distance ÷ groundspeed); on low final approach or climb-out the
+runway is **estimated from the aircraft's heading** (runway numbers are
+headings/10); airline names resolve from the ICAO callsign prefix via
+`data/airlines.txt`. Peculiarities to know: origin/destination is
+unknown (`FR/TO` shows `-`), flights not yet airborne don't appear, and
+callsigns can differ from marketed flight numbers (SWR4TH vs LX318).
+Data comes from adsb.fi, then adsb.lol, then adsb.one — all keyless and
+speaking the same readsb "re-api" (`ADSB_URLS` reorders or extends the
+list) — then OpenSky; raw responses are cached for 10 seconds. Needs the
+airport's coordinates in `data/airports.txt` (3,270 bundled) and
+`lib/curl`.
+
+### `aeroapi` — FlightAware AeroAPI (`SOURCE1=aeroapi,KEY`)
+
+True schedules: arrivals, scheduled arrivals, departures and scheduled
+departures, with origin/destination airports, ICAO aircraft types, and
+the **actual runway used** on flights that have landed or departed
+(scheduled flights show `-` until then). Key from
+flightaware.com/aeroapi; the Personal tier is a monthly usage credit
+(~USD 5, roughly USD 0.025 per airport-flights query ≈ 200/month).
+PaperTerminal fits that by design: one combined `/flights` query (billed
+once) serves all three boards from cached raw JSON, and a persistent
+counter caps calls at `AERO_DAY`/day (default 6) and `AERO_MONTH`/month
+(default 190) — covering airport-search lookups too. Usage shows on the
+help screen and self-test. Requires `lib/curl` (HTTPS + API-key header).
+Accepts IATA and ICAO airport codes.
+
+### `aviationstack` (`SOURCE2=aviationstack,KEY`)
+
+True schedules with full airline names and IATA aircraft types; **no
+runway data** (always `-`). Key from aviationstack.com; the free tier
+allows about 100 requests per month and only plain HTTP — which is also
+its unique strength here: it works even without `lib/curl` (busybox wget
+fallback). Budgeted at `AVSTACK_MONTH`/month (default 90, persistent
+counter). Note each combined-board refresh costs 2 requests (arrivals +
+departures are separate calls), so it fits best as a backup source.
+
+### OpenSky Network — built-in last resort, keyless
+
+Used automatically (never configured as a SOURCE) when all three ADS-B
+aggregators are unreachable: positions for the traffic map and the same
+derived board, from `/states/all` with a bounding box around the
+airport. Anonymous peculiarities are respected: ~400 credits/day
+(budgeted at `OPENSKY_DAY`, default 300, persistent counter; 0 disables),
+10-second data resolution (matched by the raw cache), metric units
+(converted), and array-shaped responses (own parser, tolerant of
+comma-containing country names).
+
+All flight data is additionally cached for `CACHE` seconds (default
+300), and when everything fails the last data is shown with an honest
+footer (`ZRH - DATA 25MIN OLD`) instead of an empty board.
 
 ## Bundled HTTPS stack
 
@@ -141,13 +285,13 @@ Kindle's stock TLS tooling:
 | `openssl`    | OpenSSL 3.5.7 CLI (`s_client` etc.), statically linked, for debugging |
 | `cacert.pem` | Mozilla CA root bundle from <https://curl.se/ca/cacert.pem> |
 
-All fetches go through the bundled curl with `--cacert lib/cacert.pem`, so
-certificates are properly verified against current roots. The binaries
-target ARMv5 soft-float musl, so they run on the K3's ARMv6 CPU and 2.6.26
-kernel with no firmware dependencies (OpenSSL is built with
+All fetches go through the bundled curl with `--cacert lib/cacert.pem`,
+so certificates are properly verified against current roots. The binaries
+target ARMv5 soft-float musl, so they run on the K3's ARMv6 CPU and
+2.6.26 kernel with no firmware dependencies (OpenSSL is built with
 `--with-rand-seed=devrandom` because that kernel predates `getrandom()`).
-If `lib/curl` is missing or not runnable, the extension quietly falls back
-to busybox wget, which limits `FEED_URL` to plain `http://`.
+Some firmwares mount `/mnt/us` noexec; the extension detects that and
+runs a copy of curl from `/var/tmp` automatically.
 
 Provenance: `lib/BUILDINFO.txt` records source versions and checksums,
 `lib/SHA256SUMS` the shipped binaries. Rebuild reproducibly with
@@ -158,118 +302,59 @@ under qemu-arm, uploads the bundle as an artifact, and can commit the
 refreshed bundle back to the branch. Use the same workflow to refresh
 `cacert.pem` periodically.
 
-Use the KUAL menu's **Network self-test (HTTPS)** to verify the stack on
-the device: it checks `lib/curl` runs, fetches an HTTPS page with
-certificate verification, then tests your configured feed.
-
-## Flight data
-
-The board reads a minimal text feed served by `server/feed_proxy.py`. The
-proxy needs only the Python 3 standard library:
-
-```sh
-# With FlightAware AeroAPI (has real runway + aircraft type data;
-# personal tier is free within limits):
-python3 server/feed_proxy.py --backend aeroapi --key YOUR_AEROAPI_KEY
-
-# Or with aviationstack (free key; no runway data, shown as '-'):
-python3 server/feed_proxy.py --backend aviationstack --key YOUR_KEY
-
-# With flight-data failover - aviationstack answers when AeroAPI fails:
-python3 server/feed_proxy.py --backend aeroapi --key K1 \
-    --backend2 aviationstack --key2 K2
-```
-
-Live aircraft positions for the traffic map are fetched from open ADS-B
-aggregators (api.adsb.lol, then opendata.adsb.fi as fallback — no API key
-needed), matched to flights by callsign, and attached to feed lines as
-whole-nautical-mile east/north offsets from the airport. Positions are
-available for airports in the proxy's `AIRPORT_COORDS` table (ZRH, BUD,
-AMS, STR and other majors are included — extend it for yours, or use
-`--no-adsb` to disable lookups).
-
-Then set on the Kindle:
-
-```
-FEED_URL=http://<proxy-machine-LAN-IP>:8091/feed
-```
-
-or, with the proxy hosted anywhere behind a TLS reverse proxy or tunnel
-(the bundled curl verifies the certificate against `lib/cacert.pem`):
-
-```
-FEED_URL=https://your-host.example.com/feed
-```
-
-Upstream responses are cached (default 5 minutes) so refreshing the board
-doesn't burn your API quota. Runway information comes from AeroAPI's
-`actual_runway_on/off` fields, so it appears on flights that have already
-landed or departed; not-yet-departed scheduled flights show `-`.
-
-### Feed protocol
-
-Anything that can serve this trivial format over plain HTTP works as a
-backend — the proxy is just a convenience:
-
-```
-GET /feed?airport=ZRH&dir=all&limit=12&window=ahead
-    dir:    arr | dep | all
-    window: ahead (default) | split
-
-#PAPERTERMINAL 3 OK ZRH ALL AHEAD
-A|13:41|LX1073|SWISS|A20N|14|BUD|-12|31
-D|13:44|LX316|SWISS|BCS3|28|LCY||
-```
-
-One flight per line: `DIR|TIME|FLIGHT|AIRLINE|TYPE|RUNWAY|AIRPORT|DX|DY`,
-where `DIR` is `A` (arrival) or `D` (departure), `AIRPORT` is the origin
-for arrivals and the destination for departures, and `DX`/`DY` are the
-aircraft's live ADS-B position in whole nautical miles east/north of the
-airport (empty when the aircraft isn't currently seen). `dir=all` returns
-both directions interleaved and sorted by time. `window=ahead` returns a
-recent tail plus upcoming flights (`limit` lines — what the boards show);
-`window=split` returns the `limit` flights closest before now **and** the
-`limit` closest after now — the set most likely to be airborne, used by
-the live traffic map. Lines starting with `#` are ignored by the device.
-
 ## Repository layout
 
 ```
 extensions/paperterminal/   the KUAL extension (copy this to the Kindle)
   config.xml                KUAL extension descriptor
   menu.json                 KUAL menu entries
-  bin/common.sh             shared helpers (config, eips drawing, fetching)
-  bin/board.sh              fetches the feed and draws the board
+  bin/nav.sh                navigation hub: hardware keys, menu, key test
+  bin/sources.sh            direct API clients + awk JSON parser + cache
+  bin/board.sh              arrival/departure/combined boards
   bin/radar.sh              live traffic map from ADS-B positions
   bin/runways.sh            runway diagram viewer
-  bin/set_airport.sh        writes the default airport
-  bin/nettest.sh            on-device network / HTTPS self-test
-  bin/help.sh               on-device help screen
+  bin/set_airport.sh        writes the default airport (KUAL submenu)
+  bin/nettest.sh            network / HTTPS / sources self-test
+  bin/help.sh               help + current settings screen
+  bin/common.sh             shared helpers (config, eips drawing, fetching)
+  data/airports.txt         searchable airport database (3,270 airports)
+  data/airlines.txt         IATA airline code -> display name
   data/runways/*.txt        runway line drawings (ZRH, BUD, AMS, STR)
   lib/curl                  static modern curl + OpenSSL for the K3
   lib/openssl               static OpenSSL CLI for debugging
   lib/cacert.pem            Mozilla CA root bundle
   lib/BUILDINFO.txt         provenance: versions, checksums, target
 build/build-https-stack.sh  reproducible cross-build of lib/ from source
-.github/workflows/          CI: rebuild + test + refresh the HTTPS stack
-server/feed_proxy.py        feed proxy for live data (LAN or internet)
+build/update-airports.py    regenerate the airport database (OurAirports)
+.github/workflows/          CI: HTTPS-stack rebuild, airport-db refresh,
+                            and release packaging (tag v* or manual run
+                            publishes the ready-to-copy zip)
 ```
 
 ## Troubleshooting
 
-- **Board flashes and disappears** — you pressed a key; the Kindle UI
-  repaints over the board. Just relaunch it from KUAL.
-- **`FEED UNREACHABLE OR INVALID` screen** — the Kindle couldn't fetch or
-  parse `FEED_URL`. Run the **Network self-test (HTTPS)** from the KUAL
-  menu: it tells you whether the TLS stack, the internet connection, or
-  the feed itself is the problem. The last error is written to
+- **The KUAL menu pops back over my screen** — launch screens through
+  `nav.sh` entries (all bundled menu items do this). The hub waits out
+  KUAL's repaint and then re-takes the screen on every keypress. If you
+  still lose the screen, press any letter key — the current screen
+  redraws.
+- **Navigation keys do nothing** — your firmware may use different
+  keycodes. Run **Key test (navigation setup)** from KUAL, press the
+  Menu/Back/Home keys, and put the codes shown into `KEY_MENU`,
+  `KEY_BACK`, `KEY_HOME` in `paperterminal.conf`.
+- **`ALL CONFIGURED DATA SOURCES FAILED` screen** — run the network
+  self-test: it checks the TLS stack, internet reachability, each source,
+  and ADS-B separately. The most common cause is a missing API key in
+  `SOURCE1=`. Errors are appended to
   `extensions/paperterminal/paperterminal.log`.
-- **`https://` feed fails but http works** — make sure the `lib/` folder
-  was copied to the Kindle along with the rest of the extension. Some
-  firmwares mount `/mnt/us` noexec; the extension handles that
-  automatically by running a copy of curl from `/var/tmp`.
+- **Suspected crash** — the same log captures stderr of the navigation
+  hub; check its tail. The hub also exits by itself after 10 minutes of
+  inactivity, so stray processes don't linger.
 - **`-` shown for runway** — expected for flights that haven't
-  landed/departed yet, and for the aviationstack backend always.
+  landed/departed yet, and for the aviationstack source always.
+- **Map shows `NO POS` for most flights** — normal for flights not
+  currently airborne; also check the airport has coordinates in
+  `data/airports.txt` and that ADS-B passes in the self-test.
 - **Nothing appears in KUAL** — make sure the folder is
   `extensions/paperterminal` (lowercase) directly under the Kindle's
   `extensions` directory.

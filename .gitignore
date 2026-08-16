@@ -1,6 +1,9 @@
 # Runtime files created on the device
 extensions/paperterminal/paperterminal.conf
 extensions/paperterminal/paperterminal.log
+extensions/paperterminal/aeroapi.usage
+extensions/paperterminal/opensky.usage
+extensions/paperterminal/avstack.usage
 __pycache__/
 
 # Cross-build working directory

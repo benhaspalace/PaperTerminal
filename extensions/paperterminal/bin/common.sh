@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="2.1.0"
+PT_VERSION="4.0.0"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -61,58 +61,133 @@ cfg() { sed -n "s/^$1=//p" "$PT_CONF" 2>/dev/null | head -n 1 | tr -d '\r'; }
 
 load_conf() {
     [ -f "$PT_CONF" ] || save_conf_defaults
-    AIRPORT="$(cfg AIRPORT)";   [ -n "$AIRPORT" ]  || AIRPORT="ZRH"
-    FEED_URL="$(cfg FEED_URL)"; [ -n "$FEED_URL" ] || FEED_URL="http://192.168.0.10:8091/feed"
-    FEED_URL2="$(cfg FEED_URL2)"
-    FEED_URL3="$(cfg FEED_URL3)"
+    AIRPORT="$(cfg AIRPORT)"; [ -n "$AIRPORT" ] || AIRPORT="ZRH"
+    SOURCE1="$(cfg SOURCE1)"
+    SOURCE2="$(cfg SOURCE2)"
+    SOURCE3="$(cfg SOURCE3)"
+    # Keyed APIs are used only when explicitly configured; out of the box
+    # everything runs on the free keyless ADS-B chain.
+    [ -n "$SOURCE1$SOURCE2$SOURCE3" ] || SOURCE1="adsb"
     ROWS="$(cfg ROWS)"
     case "$ROWS" in ''|*[!0-9]*) ROWS=12;; esac
     [ "$ROWS" -gt 14 ] && ROWS=14
     [ "$ROWS" -lt 1 ]  && ROWS=1
     REFRESH="$(cfg REFRESH)"
-    case "$REFRESH" in ''|*[!0-9]*) REFRESH=0;; esac
+    case "$REFRESH" in ''|*[!0-9]*) REFRESH=5;; esac
     RANGE="$(cfg RANGE)"
     case "$RANGE" in ''|*[!0-9]*) RANGE=32;; esac
     [ "$RANGE" -gt 200 ] && RANGE=200
     [ "$RANGE" -lt 8 ]   && RANGE=8
+    CACHE="$(cfg CACHE)"
+    case "$CACHE" in ''|*[!0-9]*) CACHE=300;; esac
+    AERO_DAY="$(cfg AERO_DAY)"
+    case "$AERO_DAY" in ''|*[!0-9]*) AERO_DAY=6;; esac
+    AERO_MONTH="$(cfg AERO_MONTH)"
+    case "$AERO_MONTH" in ''|*[!0-9]*) AERO_MONTH=190;; esac
+    AVSTACK_MONTH="$(cfg AVSTACK_MONTH)"
+    case "$AVSTACK_MONTH" in ''|*[!0-9]*) AVSTACK_MONTH=90;; esac
+    ADSB_URLS="$(cfg ADSB_URLS)"
+    OPENSKY_DAY="$(cfg OPENSKY_DAY)"
+    case "$OPENSKY_DAY" in ''|*[!0-9]*) OPENSKY_DAY=300;; esac
+    KEY_MENU="$(cfg KEY_MENU)"; case "$KEY_MENU" in ''|*[!0-9]*) KEY_MENU=139;; esac
+    KEY_BACK="$(cfg KEY_BACK)"; case "$KEY_BACK" in ''|*[!0-9]*) KEY_BACK=158;; esac
+    KEY_HOME="$(cfg KEY_HOME)"; case "$KEY_HOME" in ''|*[!0-9]*) KEY_HOME=102;; esac
+    KEY_UP="$(cfg KEY_UP)";     case "$KEY_UP" in ''|*[!0-9]*) KEY_UP=103;; esac
+    KEY_DOWN="$(cfg KEY_DOWN)"; case "$KEY_DOWN" in ''|*[!0-9]*) KEY_DOWN=108;; esac
+    KEY_SELECT="$(cfg KEY_SELECT)"; case "$KEY_SELECT" in ''|*[!0-9]*) KEY_SELECT=194;; esac
+    INPUT_DEVS="$(cfg INPUT_DEVS)"
+    [ -n "$INPUT_DEVS" ] || INPUT_DEVS="/dev/input/event0 /dev/input/event1 /dev/input/event2"
 }
 
 save_conf() {
     cat > "$PT_CONF" <<EOF
 # PaperTerminal settings - safe to edit over USB.
-# AIRPORT  : default airport code (IATA like ZRH; ICAO also fine for AeroAPI)
-# FEED_URL : your feed endpoint (see server/feed_proxy.py in the repo).
-#            https:// works via the bundled lib/curl and is verified with
-#            lib/cacert.pem; plain http:// works even without lib/
-#            (busybox wget fallback).
-# FEED_URL2/FEED_URL3 : optional backup feeds, tried in order when the
-#            previous one fails (leave empty if unused)
+# AIRPORT  : default airport code (IATA like ZRH; ICAO like LSZH also works
+#            for AeroAPI; add coordinates to data/airports.txt for the map)
+# SOURCE1-3: flight-data sources, tried in order until one answers.
+#            TYPE or TYPE,APIKEY with TYPE one of:
+#              adsb           FREE, no key (the default): live board derived
+#                             from ADS-B (adsb.fi -> adsb.lol -> OpenSky).
+#                             Times are estimates, FR/TO unknown, runway
+#                             estimated from final-approach heading.
+#              aeroapi        FlightAware AeroAPI, key required: true
+#                             schedules, origins/destinations, actual
+#                             runway used (needs lib/curl; budgeted, see
+#                             AERO_DAY/AERO_MONTH)
+#              aviationstack  aviationstack.com, key required: schedules
+#                             and airline names, no runway (plain http;
+#                             budgeted, see AVSTACK_MONTH)
 # ROWS     : flights per board, 1..14; also the per-side count for the
 #            live traffic map (ROWS before + ROWS after now)
-# REFRESH  : auto-redraw interval in seconds, 0 = draw once
+# REFRESH  : board/map update interval in seconds (default 5), 0 = draw
+#            once. Updates re-read the cache and only repaint the e-ink
+#            when the content actually changed, so this does not burn
+#            API budget or flash the screen needlessly.
 # RANGE    : live traffic map radius in nautical miles, 8..200
+# CACHE    : seconds to reuse fetched data (protects your API quota)
+# AERO_DAY / AERO_MONTH : max AeroAPI queries per day / calendar month.
+#            The free Personal tier is a ~USD 5 monthly credit at roughly
+#            USD 0.025 per airport-flights query (~200/month); defaults
+#            6/day and 190/month keep a safety margin. When the budget is
+#            spent, backup sources or clearly-marked stale data are shown.
+# AVSTACK_MONTH : max aviationstack requests per calendar month; their
+#            free tier allows ~100/month, default 90 keeps a margin.
+# ADSB_URLS: space-separated ADS-B API bases (the free adsb source and
+#            the traffic map), tried in order. Empty = built-in default
+#            (adsb.fi, then adsb.lol, then adsb.one).
+# OPENSKY_DAY: max anonymous OpenSky Network queries per day, used as the
+#            last position fallback when the ADS-B aggregators fail.
+#            Anonymous OpenSky allows ~400 credits/day; default 300
+#            keeps a margin. 0 disables OpenSky entirely.
+# KEY_*    : keycodes for on-device navigation (see the key test screen)
 AIRPORT=$AIRPORT
-FEED_URL=$FEED_URL
-FEED_URL2=$FEED_URL2
-FEED_URL3=$FEED_URL3
+SOURCE1=$SOURCE1
+SOURCE2=$SOURCE2
+SOURCE3=$SOURCE3
 ROWS=$ROWS
 REFRESH=$REFRESH
 RANGE=$RANGE
+CACHE=$CACHE
+AERO_DAY=$AERO_DAY
+AERO_MONTH=$AERO_MONTH
+AVSTACK_MONTH=$AVSTACK_MONTH
+ADSB_URLS=$ADSB_URLS
+OPENSKY_DAY=$OPENSKY_DAY
+KEY_MENU=$KEY_MENU
+KEY_BACK=$KEY_BACK
+KEY_HOME=$KEY_HOME
+KEY_UP=$KEY_UP
+KEY_DOWN=$KEY_DOWN
+KEY_SELECT=$KEY_SELECT
+INPUT_DEVS=$INPUT_DEVS
 EOF
 }
 
 save_conf_defaults() {
     AIRPORT="ZRH"
-    FEED_URL="http://192.168.0.10:8091/feed"
-    FEED_URL2=""
-    FEED_URL3=""
+    SOURCE1="adsb"
+    SOURCE2=""
+    SOURCE3=""
     ROWS=12
-    REFRESH=0
+    REFRESH=5
     RANGE=32
+    CACHE=300
+    AERO_DAY=6
+    AERO_MONTH=190
+    AVSTACK_MONTH=90
+    ADSB_URLS=""
+    OPENSKY_DAY=300
+    KEY_MENU=139
+    KEY_BACK=158
+    KEY_HOME=102
+    KEY_UP=103
+    KEY_DOWN=108
+    KEY_SELECT=194
+    INPUT_DEVS="/dev/input/event0 /dev/input/event1 /dev/input/event2"
     save_conf
 }
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" > "$PT_LOG" 2>/dev/null; }
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$PT_LOG" 2>/dev/null; }
 
 # ----------------------------------------------------------------- fetch ---
 
@@ -168,31 +243,11 @@ pt_fetch() {
     [ -s "$2" ]
 }
 
-# pt_fetch_feed <query-string> <outfile> - failover fetch: try FEED_URL,
-# FEED_URL2, FEED_URL3 in order until one returns valid flight lines.
-# Sets PT_FEED_USED to the index of the feed that answered (1..3).
-pt_fetch_feed() {
-    PT_FEED_USED=0
-    _idx=0
-    for _u in "$FEED_URL" "$FEED_URL2" "$FEED_URL3"; do
-        _idx=$(( _idx + 1 ))
-        [ -n "$_u" ] || continue
-        rm -f "$2"
-        if pt_fetch "$_u?$1" "$2" && [ -s "$2" ] \
-           && grep -q '^[AD]|.*|.*|.*|.*|.*|' "$2"; then
-            PT_FEED_USED=$_idx
-            return 0
-        fi
-        log "feed $_idx failed: $_u?$1"
-    done
-    return 1
-}
-
-# Number of configured feed URLs (for messages).
-pt_feed_count() {
-    _n=0
-    for _u in "$FEED_URL" "$FEED_URL2" "$FEED_URL3"; do
-        [ -n "$_u" ] && _n=$(( _n + 1 ))
-    done
-    echo $_n
+# Crash diagnosis: call from long-running entry points to capture all
+# stderr into the log (kept small).
+pt_capture_errors() {
+    if [ -f "$PT_LOG" ] && [ "$(wc -c < "$PT_LOG")" -gt 16000 ]; then
+        tail -n 40 "$PT_LOG" > "$PT_LOG.t" 2>/dev/null && mv "$PT_LOG.t" "$PT_LOG"
+    fi
+    exec 2>>"$PT_LOG"
 }

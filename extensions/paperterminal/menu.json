@@ -4,11 +4,12 @@
             "name": "PaperTerminal Flight Board",
             "priority": 1,
             "items": [
-                { "name": "Arrivals board",   "action": "bin/board.sh", "params": "arr" },
-                { "name": "Departures board", "action": "bin/board.sh", "params": "dep" },
-                { "name": "Combined board (arr + dep)", "action": "bin/board.sh", "params": "all" },
-                { "name": "Live traffic map",  "action": "bin/radar.sh" },
-                { "name": "Runway diagram",    "action": "bin/runways.sh" },
+                { "name": "Open PaperTerminal (menu)", "action": "bin/nav.sh", "params": "menu" },
+                { "name": "Arrivals board",   "action": "bin/nav.sh", "params": "arr" },
+                { "name": "Departures board", "action": "bin/nav.sh", "params": "dep" },
+                { "name": "Combined board (arr + dep)", "action": "bin/nav.sh", "params": "all" },
+                { "name": "Live traffic map",  "action": "bin/nav.sh", "params": "map" },
+                { "name": "Runway diagram",    "action": "bin/nav.sh", "params": "rwy" },
                 {
                     "name": "Set default airport",
                     "items": [
@@ -22,11 +23,13 @@
                         { "name": "MUC - Munich",          "action": "bin/set_airport.sh", "params": "MUC" },
                         { "name": "VIE - Vienna",          "action": "bin/set_airport.sh", "params": "VIE" },
                         { "name": "BUD - Budapest",        "action": "bin/set_airport.sh", "params": "BUD" },
+                        { "name": "STR - Stuttgart",       "action": "bin/set_airport.sh", "params": "STR" },
                         { "name": "JFK - New York JFK",    "action": "bin/set_airport.sh", "params": "JFK" }
                     ]
                 },
-                { "name": "Network self-test (HTTPS)", "action": "bin/nettest.sh" },
-                { "name": "Help + current settings",  "action": "bin/help.sh" }
+                { "name": "Network self-test (HTTPS)",     "action": "bin/nav.sh", "params": "net" },
+                { "name": "Key test (navigation setup)",   "action": "bin/nav.sh", "params": "keytest" },
+                { "name": "Help + current settings",       "action": "bin/nav.sh", "params": "help" }
             ]
         }
     ]
