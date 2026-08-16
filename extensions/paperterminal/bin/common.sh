@@ -19,7 +19,7 @@ PT_CURL="$PT_LIB/curl"
 PT_CACERT="$PT_LIB/cacert.pem"
 PT_RAMCURL="/var/tmp/paperterminal-curl"
 
-PT_VERSION="3.2.0"
+PT_VERSION="3.2.1"
 
 # ---------------------------------------------------------------- screen ---
 # Kindle 3: 600x800 e-ink. eips draws text on a 50 col x 40 row grid
@@ -82,6 +82,7 @@ load_conf() {
     case "$AERO_DAY" in ''|*[!0-9]*) AERO_DAY=6;; esac
     AERO_MONTH="$(cfg AERO_MONTH)"
     case "$AERO_MONTH" in ''|*[!0-9]*) AERO_MONTH=190;; esac
+    ADSB_URLS="$(cfg ADSB_URLS)"
     KEY_MENU="$(cfg KEY_MENU)"; case "$KEY_MENU" in ''|*[!0-9]*) KEY_MENU=139;; esac
     KEY_BACK="$(cfg KEY_BACK)"; case "$KEY_BACK" in ''|*[!0-9]*) KEY_BACK=158;; esac
     KEY_HOME="$(cfg KEY_HOME)"; case "$KEY_HOME" in ''|*[!0-9]*) KEY_HOME=102;; esac
@@ -111,6 +112,8 @@ save_conf() {
 #            USD 0.025 per airport-flights query (~200/month); defaults
 #            6/day and 190/month keep a safety margin. When the budget is
 #            spent, backup sources or clearly-marked stale data are shown.
+# ADSB_URLS: space-separated ADS-B API bases for the traffic map, tried
+#            in order. Empty = built-in default (adsb.fi, then adsb.lol).
 # KEY_*    : keycodes for on-device navigation (see the key test screen)
 AIRPORT=$AIRPORT
 SOURCE1=$SOURCE1
@@ -122,6 +125,7 @@ RANGE=$RANGE
 CACHE=$CACHE
 AERO_DAY=$AERO_DAY
 AERO_MONTH=$AERO_MONTH
+ADSB_URLS=$ADSB_URLS
 KEY_MENU=$KEY_MENU
 KEY_BACK=$KEY_BACK
 KEY_HOME=$KEY_HOME
@@ -143,6 +147,7 @@ save_conf_defaults() {
     CACHE=300
     AERO_DAY=6
     AERO_MONTH=190
+    ADSB_URLS=""
     KEY_MENU=139
     KEY_BACK=158
     KEY_HOME=102

@@ -7,7 +7,7 @@
 #   SOURCE2=aviationstack,YOUR_KEY  aviationstack (no runway data)
 #
 # Live positions for the traffic map come straight from open ADS-B
-# aggregators (api.adsb.lol, opendata.adsb.fi) - no key needed.
+# aggregators (adsb.fi first, adsb.lol as fallback) - no key needed.
 #
 # All JSON is parsed on-device by a small awk object scanner that tracks
 # brace depth and string state, so it does not depend on key order or
@@ -19,7 +19,7 @@ PT_CACHE_DIR="/tmp/paperterminal.cache"
 
 AEROAPI_BASE="${PT_AEROAPI_BASE:-https://aeroapi.flightaware.com/aeroapi}"
 AVSTACK_BASE="${PT_AVSTACK_BASE:-http://api.aviationstack.com/v1}"
-ADSB_BASES="${PT_ADSB_BASES:-https://api.adsb.lol/v2 https://opendata.adsb.fi/api/v2}"
+ADSB_DEFAULT="https://opendata.adsb.fi/api/v2 https://api.adsb.lol/v2"
 
 # --------------------------------------------------------------- time ------
 
@@ -451,7 +451,8 @@ src_positions() {
     R=$(( RANGE * 2 ))
     [ $R -lt 60 ]  && R=60
     [ $R -gt 250 ] && R=250
-    for base in $ADSB_BASES; do
+    # Resolution order: test override, then the config file, then default.
+    for base in ${PT_ADSB_BASES:-${ADSB_URLS:-$ADSB_DEFAULT}}; do
         if "$CURLBIN" -sS --connect-timeout 10 -m 25 --cacert "$PT_CACERT" \
             -A "PaperTerminal/$PT_VERSION" -o "$PT_TMP.adsb" \
             "$base/point/$1/$2/$R" 2>/dev/null \

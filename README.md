@@ -186,10 +186,10 @@ scanner (no key-order or formatting assumptions):
 - **aviationstack** (`SOURCE2=aviationstack,KEY`): full airline names and
   IATA aircraft types, no runway data. Works over plain HTTP, so it even
   functions without `lib/curl`.
-- **ADS-B positions** (no key): the traffic map asks api.adsb.lol (then
-  opendata.adsb.fi as fallback) for all aircraft around the airport in
-  one call, matches them to flights by callsign, and plots east/north
-  offsets computed in awk.
+- **ADS-B positions** (no key): the traffic map asks adsb.fi (then
+  adsb.lol as fallback; order configurable via `ADSB_URLS`) for all
+  aircraft around the airport in one call, matches them to flights by
+  callsign, and plots east/north offsets computed in awk.
 
 Sources are tried in order until one delivers; the board footer notes
 when a backup source answered (`BACKUP SOURCE 2`). Responses are cached
